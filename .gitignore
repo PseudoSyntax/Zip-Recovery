@@ -9,3 +9,11 @@ found_password.txt
 *.zip
 !sample/*.zip
 .DS_Store
+
+# PyInstaller build outputs (never commit the built executables or fixtures)
+build/
+dist/
+*.spec
+*.exe
+smoke/
+wordlist-cache/
