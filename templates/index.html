@@ -11,11 +11,8 @@
     <header>
       <h1>Zip&#8209;Recovery</h1>
       <p class="sub">Recover the password to a <code>.7z</code> or <code>.zip</code>
-         archive you own, by testing variations of words you might have used.</p>
+         archive by testing a wordlist and variations of it. One archive at a time.</p>
     </header>
-
-    <p class="notice">For archives you own. Feed it words you remember and it
-       works outward from there. This is a recall helper, not a mass cracker.</p>
 
     <form id="form">
       {% if token_required %}
@@ -24,32 +21,49 @@
       </label>
       {% endif %}
 
-      <label>Archive <span class="hint">(.7z or .zip, up to {{ max_mb }} MB)</span>
+      <label class="big">1. Archive <span class="hint">(.7z or .zip, up to {{ max_mb }} MB, one file)</span>
         <input type="file" name="archive" accept=".7z,.zip" required>
       </label>
 
-      <label>Words you might have used <span class="hint">(one per line, tried first)</span>
-        <textarea name="hints" rows="5" placeholder="Fluffy&#10;Summer2019&#10;my usual base word"></textarea>
+      <label class="big">2. Wordlist <span class="hint">(upload a list, one candidate per line)</span>
+        <input type="file" name="wordlist" accept=".txt,.lst,.dic,.wordlist">
       </label>
 
-      <label>Optional wordlist file <span class="hint">(one candidate per line)</span>
-        <input type="file" name="wordlist" accept=".txt,.lst,.dic">
+      <label>Extra words <span class="hint">(optional, one per line, tried first)</span>
+        <textarea name="hints" rows="4" placeholder="Fluffy&#10;Summer2019&#10;my usual base word"></textarea>
       </label>
 
-      <fieldset>
-        <legend>Rule kits</legend>
-        <label class="chk"><input type="checkbox" name="kits" value="base" checked> base</label>
-        <label class="chk"><input type="checkbox" name="kits" value="case" checked> case</label>
-        <label class="chk"><input type="checkbox" name="kits" value="affix" checked> affix (years/numbers/symbols)</label>
-        <label class="chk"><input type="checkbox" name="kits" value="leet" checked> leet</label>
-        <label class="chk"><input type="checkbox" name="kits" value="dup"> dup/reverse</label>
-        <label class="chk"><input type="checkbox" name="kits" value="combo"> combo (two words)</label>
-      </fieldset>
+      <details class="settings" open>
+        <summary>3. Attempt settings</summary>
 
-      <div class="row">
-        <label>Years <input type="text" name="years" value="2015-2026"></label>
-        <label>Digit runs <input type="text" name="digits" value="0-99"></label>
-      </div>
+        <fieldset>
+          <legend>Rule kits (variations built from each word)</legend>
+          <label class="chk"><input type="checkbox" name="kits" value="base" checked> base</label>
+          <label class="chk"><input type="checkbox" name="kits" value="case" checked> case</label>
+          <label class="chk"><input type="checkbox" name="kits" value="affix" checked> affix (years/numbers/symbols)</label>
+          <label class="chk"><input type="checkbox" name="kits" value="leet" checked> leet</label>
+          <label class="chk"><input type="checkbox" name="kits" value="dup"> dup/reverse</label>
+          <label class="chk"><input type="checkbox" name="kits" value="combo"> combo (two words)</label>
+        </fieldset>
+
+        <div class="row">
+          <label>Years <input type="text" name="years" value="2015-2026"></label>
+          <label>Digit runs <input type="text" name="digits" value="0-99"></label>
+          <label>Leet cap / word <input type="number" name="leet_cap" value="64" min="1"></label>
+        </div>
+
+        <div class="row">
+          <label>Max attempts <span class="hint">0 = unlimited</span>
+            <input type="number" name="max_attempts" value="{{ def_max_attempts }}" min="0">
+          </label>
+          <label>Max time (seconds) <span class="hint">0 = unlimited</span>
+            <input type="number" name="max_seconds" value="{{ def_max_seconds }}" min="0">
+          </label>
+          <label>Combo separators <input type="text" name="combo_sep" value="-,_,"></label>
+        </div>
+        <p class="budget-note">With both set to 0 it runs until it finds the password
+           or exhausts every candidate.</p>
+      </details>
 
       <button type="submit" id="go">Start recovery</button>
     </form>
@@ -64,7 +78,7 @@
       <button id="cancel" hidden>Stop</button>
     </section>
 
-    <footer>Self&#8209;hosted. Keep it on localhost or behind an access token.</footer>
+    <footer>Self&#8209;hosted. Runs one archive at a time against the wordlist you give it.</footer>
   </main>
 
   <script>
@@ -85,28 +99,25 @@
       goBtn.disabled = true;
       resultEl.hidden = true; resultEl.textContent = '';
       panel.hidden = false; stateEl.textContent = 'starting';
-      stateEl.className = 'badge';
-      logEl.textContent = '';
+      stateEl.className = 'badge'; logEl.textContent = '';
       try {
         const r = await fetch('start', { method: 'POST', body: fd });
         const data = await r.json();
-        if (!r.ok) { throw new Error(data.error || 'failed to start'); }
+        if (!r.ok) throw new Error(data.error || 'failed to start');
         jobId = data.job_id;
         cancelBtn.hidden = false;
         poll();
         timer = setInterval(poll, 1000);
       } catch (err) {
         stateEl.textContent = 'error'; stateEl.className = 'badge err';
-        logEl.textContent = err.message;
-        goBtn.disabled = false;
+        logEl.textContent = err.message; goBtn.disabled = false;
       }
     });
 
     cancelBtn.addEventListener('click', async () => {
       if (!jobId) return;
       await fetch('cancel/' + jobId, {
-        method: 'POST',
-        headers: token ? { 'X-Access-Token': token } : {}
+        method: 'POST', headers: token ? { 'X-Access-Token': token } : {}
       });
     });
 
@@ -119,7 +130,8 @@
       stateEl.textContent = j.state;
       metaEl.textContent = `${j.tried || 0} tried` +
         (j.rate ? ` at ${j.rate}/s` : '') +
-        (j.backend ? ` via ${j.backend}` : '');
+        (j.backend ? ` via ${j.backend}` : '') +
+        (j.unlimited ? ' (unlimited)' : '');
       if (j.last) logEl.textContent = 'last candidate: ' + j.last;
 
       if (['found', 'exhausted', 'cancelled', 'error'].includes(j.state)) {
@@ -131,7 +143,7 @@
           resultEl.querySelector('.pw').textContent = j.password;
         } else if (j.state === 'exhausted') {
           resultEl.textContent =
-            'No match in the generated candidates. Add more words, or enable more kits / widen years.';
+            'No match across the whole candidate set. Add more words, enable more kits, or widen the ranges.';
         } else if (j.state === 'cancelled') {
           resultEl.textContent = 'Stopped.';
         } else {

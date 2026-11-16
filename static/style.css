@@ -53,3 +53,13 @@ pre { background: #0c0e12; border: 1px solid var(--line); border-radius: 8px; pa
 #result { margin-top: .8rem; font-size: 1rem; }
 .pw { background: #0f3a2c; color: var(--ok); padding: .2rem .5rem; border-radius: 6px; font-size: 1.05rem; }
 footer { margin-top: 2.5rem; color: var(--muted); font-size: .82rem; text-align: center; }
+
+input[type=number] { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: .55rem .65rem; font: inherit; width: 100%; }
+label.big { font-size: 1rem; }
+label.big > input[type=file] { margin-top: .1rem; }
+details.settings { border: 1px solid var(--line); border-radius: 8px; padding: .4rem .9rem; background: #141821; }
+details.settings[open] { padding-bottom: 1rem; }
+details.settings > summary { cursor: pointer; font-weight: 700; padding: .5rem 0; color: var(--ink); }
+details.settings > summary::marker { color: var(--accent); }
+details.settings fieldset { margin-top: .6rem; }
+.budget-note { color: var(--muted); font-size: .82rem; margin: .7rem 0 0; }

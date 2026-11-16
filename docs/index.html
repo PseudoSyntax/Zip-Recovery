@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Zip-Recovery</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Zip&#8209;Recovery</h1>
+      <p class="sub">Recover the password to a <code>.7z</code> or <code>.zip</code>
+         archive, entirely in your browser. One archive at a time.</p>
+    </header>
+
+    <p class="privacy">Your archive and wordlist never leave this page. They are
+       read locally and tested in your browser. The only thing downloaded is the
+       decryption library code, from a CDN. Nothing is uploaded.</p>
+
+    <form id="form">
+      <label class="big">1. Archive <span class="hint">(.7z or .zip, one file)</span>
+        <input type="file" name="archive" accept=".7z,.zip" required>
+      </label>
+
+      <label class="big">2. Wordlist <span class="hint">(upload a list, one candidate per line)</span>
+        <input type="file" name="wordlist" accept=".txt,.lst,.dic,.wordlist">
+      </label>
+
+      <label>Extra words <span class="hint">(optional, one per line, tried first)</span>
+        <textarea name="hints" rows="4" placeholder="Fluffy&#10;Summer2019&#10;my usual base word"></textarea>
+      </label>
+
+      <details class="settings" open>
+        <summary>3. Attempt settings</summary>
+
+        <fieldset>
+          <legend>Rule kits (variations built from each word)</legend>
+          <label class="chk"><input type="checkbox" name="kits" value="base" checked> base</label>
+          <label class="chk"><input type="checkbox" name="kits" value="case" checked> case</label>
+          <label class="chk"><input type="checkbox" name="kits" value="affix" checked> affix (years/numbers/symbols)</label>
+          <label class="chk"><input type="checkbox" name="kits" value="leet" checked> leet</label>
+          <label class="chk"><input type="checkbox" name="kits" value="dup"> dup/reverse</label>
+          <label class="chk"><input type="checkbox" name="kits" value="combo"> combo (two words)</label>
+        </fieldset>
+
+        <div class="row">
+          <label>Years <input type="text" name="years" value="2015-2026"></label>
+          <label>Digit runs <input type="text" name="digits" value="0-99"></label>
+          <label>Leet cap / word <input type="number" name="leet_cap" value="64" min="1"></label>
+        </div>
+
+        <div class="row">
+          <label>Max attempts <span class="hint">0 = unlimited</span>
+            <input type="number" name="max_attempts" value="0" min="0">
+          </label>
+          <label>Max time (seconds) <span class="hint">0 = unlimited</span>
+            <input type="number" name="max_seconds" value="0" min="0">
+          </label>
+          <label>Combo separators <input type="text" name="combo_sep" value="-,_,"></label>
+        </div>
+        <p class="budget-note">With both set to 0 it runs until it finds the password
+           or exhausts every candidate.</p>
+      </details>
+
+      <button type="submit" id="go">Start recovery</button>
+    </form>
+
+    <section id="panel" hidden>
+      <div class="status">
+        <span id="state" class="badge">running</span>
+        <span id="meta"></span>
+      </div>
+      <pre id="log"></pre>
+      <div id="result" hidden></div>
+      <button id="cancel" hidden>Stop</button>
+    </section>
+
+    <footer>
+      Runs fully client&#8209;side. <code>.zip</code> uses
+      <a href="https://github.com/gildas-lormeau/zip.js" target="_blank" rel="noopener">zip.js</a>;
+      <code>.7z</code> uses a WebAssembly build of 7&#8209;Zip and is slower.
+      For big <code>.7z</code> wordlists, the command&#8209;line <code>recall.py</code>
+      in this repo is faster.
+    </footer>
+  </main>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
