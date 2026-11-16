@@ -43,6 +43,26 @@ Backends are auto-detected per file:
 - **Browser:** [zip.js](https://github.com/gildas-lormeau/zip.js) for `.zip`,
   and a WebAssembly build of 7-Zip for `.7z`.
 
+## Requirements
+
+- Python 3.8 or newer, and `git` to clone the repo.
+- `pip install -r requirements.txt` installs Flask (web app) and `py7zr`
+  (opens `.7z` without needing the `7z` binary). Plain `.zip` needs nothing
+  extra. If you prefer to use an installed 7-Zip instead of `py7zr`, put its
+  `7z`/`7z.exe` on your PATH.
+
+```bash
+git clone https://github.com/PseudoSyntax/Zip-Recovery.git
+cd Zip-Recovery
+pip install -r requirements.txt
+```
+
+On **Windows**, use the `py` launcher in place of `python` (`py app.py`,
+`py recall.py ...`), and `C:\Program Files\7-Zip` is not on PATH by default, so
+`pip install py7zr` is the easiest way to get `.7z` support. The one-line
+`ZR_... python app.py` examples below are bash; in PowerShell set the variables
+first with `$env:ZR_TOKEN="..."` on their own lines.
+
 ## 1. Command line
 
 ```bash
@@ -81,6 +101,7 @@ Server-wide defaults come from environment variables, all optional:
 | `ZR_MAX_ATTEMPTS` | `0`          | default attempt cap (`0` = unlimited) |
 | `ZR_MAX_SECONDS`  | `0`          | default time cap (`0` = unlimited)    |
 | `ZR_MAX_JOBS`     | `2`          | concurrent jobs                       |
+| `ZR_FETCH_MAX_MB` | `200`        | size cap on a catalog wordlist download |
 
 The app binds to localhost by default. If you put it on a public server, set
 `ZR_TOKEN` (or keep it behind something that authenticates) so it is not open to
@@ -133,9 +154,11 @@ updates to the tries-per-second you enter. You can pick one or upload your own.
 | list | lines | notes |
 |------|-------|-------|
 | Top 1,000 (SecLists) | 1,000 | fast first pass |
+| John the Ripper default (`password.lst`) | 3,559 | the small list John ships |
 | Top 10,000 (SecLists) | 10,000 | sensible default |
 | Probable Top 12,000 (berzerk0) | 12,000 | sorted by real-world frequency |
 | Top 100,000 (SecLists) | 100,000 | broader coverage |
+| hashcat `example.dict` | 128,416 | hashcat's bundled example dict, not frequency-sorted |
 | Top 1,000,000 (SecLists) | 1,000,000 | thorough, long run here |
 | rockyou.txt (full) | 14,344,392 | download + hashcat, too big for this tool |
 | Weakpass | varies | up to tens of GB, hashcat only |
