@@ -67,3 +67,6 @@ details.settings fieldset { margin-top: .6rem; }
 .privacy { background: #0f2a22; border: 1px solid #1c4a3a; border-left: 3px solid var(--ok); padding: .7rem .9rem; border-radius: 8px; color: #bfe6d6; font-size: .9rem; }
 footer a { color: var(--accent); text-decoration: none; }
 footer a:hover { text-decoration: underline; }
+
+.wl-info { background: #141821; border: 1px solid var(--line); border-radius: 8px; padding: .6rem .8rem; color: #c4ccda; font-size: .86rem; margin-top: -.3rem; }
+select { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: .55rem .65rem; font: inherit; width: 100%; }

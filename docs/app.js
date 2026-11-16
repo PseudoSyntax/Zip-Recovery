@@ -21,6 +21,51 @@ const goBtn = $("go");
 const cancelBtn = $("cancel");
 
 let cancelFlag = false;
+let catalog = [];
+
+// --------------------------------------------------------------------------- //
+// Wordlist catalog (descriptions + time estimates)
+// --------------------------------------------------------------------------- //
+
+function fmtDuration(sec) {
+  if (!isFinite(sec) || sec <= 0) return "instant";
+  for (const [name, s] of [["day", 86400], ["hour", 3600], ["min", 60], ["sec", 1]]) {
+    if (sec >= s) { const n = Math.round(sec / s); return `${n} ${name}${n !== 1 ? "s" : ""}`; }
+  }
+  return "<1 sec";
+}
+
+function renderWlInfo() {
+  const sel = $("wordlist_id"), info = $("wl-info"), rateEl = $("rate");
+  const e = catalog.find((x) => x.id === sel.value);
+  if (!e) { info.hidden = true; return; }
+  const rate = Math.max(1, parseInt(rateEl.value || "50", 10));
+  const est = e.lines ? `~${fmtDuration(e.lines / rate)} at ${rate}/s` : "n/a";
+  let line = `${e.description} (${(e.lines || 0).toLocaleString()} lines, ${e.size}; est ${est})`;
+  if (!e.fetchable) line += ` — too big for the browser; download: ${e.download_url}`;
+  info.textContent = line;
+  info.hidden = false;
+}
+
+async function fetchCatalogList(entry) {
+  const r = await fetch(entry.url);
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return await r.text();
+}
+
+fetch("./wordlists.json").then((r) => r.json()).then((data) => {
+  catalog = data.lists || [];
+  const sel = $("wordlist_id"), rateEl = $("rate");
+  rateEl.value = data.default_rate || 50;
+  for (const e of catalog) {
+    const o = document.createElement("option");
+    o.value = e.id;
+    o.textContent = e.name + (e.fetchable ? "" : "  (download / hashcat)");
+    sel.appendChild(o);
+  }
+  sel.addEventListener("change", renderWlInfo);
+  rateEl.addEventListener("input", renderWlInfo);
+}).catch(() => {});
 
 // --------------------------------------------------------------------------- //
 // In-browser password testers. Each returns async (pw) => bool.
@@ -104,21 +149,41 @@ async function run(e) {
   const archive = fd.get("archive");
   if (!archive || !archive.name) { alert("Choose an archive first."); return; }
 
-  const wlFile = fd.get("wordlist");
-  const wordlistText = wlFile && wlFile.name ? await wlFile.text() : "";
   const hints = (fd.get("hints") || "").split("\n").map((s) => s.trim()).filter(Boolean);
-  const words = loadWords(wordlistText, hints);
-  if (!words.length) { alert("Add some hint words or upload a wordlist."); return; }
 
-  const opts = optsFromForm(fd);
   goBtn.disabled = true;
   cancelBtn.hidden = false;
   panel.hidden = false;
   resultEl.hidden = true;
-  stateEl.textContent = "loading engine";
+  stateEl.textContent = "preparing";
   stateEl.className = "badge";
   logEl.textContent = "";
   metaEl.textContent = "";
+
+  // where the wordlist comes from: uploaded file wins, else a catalog pick
+  let wordlistText = "";
+  const wlFile = fd.get("wordlist");
+  const wlId = fd.get("wordlist_id");
+  if (wlFile && wlFile.name) {
+    wordlistText = await wlFile.text();
+  } else if (wlId && wlId !== "none") {
+    const e = catalog.find((x) => x.id === wlId);
+    if (!e) { finish("error", { error: "unknown wordlist" }); return; }
+    if (!e.fetchable || !e.url) {
+      finish("error", { error: `"${e.name}" is too large for the browser. ` +
+        `Download it (${e.download_url}) and use recall.py, or upload a smaller list.` });
+      return;
+    }
+    stateEl.textContent = "downloading wordlist";
+    try { wordlistText = await fetchCatalogList(e); }
+    catch (err) { finish("error", { error: "could not download wordlist: " + err.message }); return; }
+  }
+
+  const words = loadWords(wordlistText, hints);
+  if (!words.length) { finish("error", { error: "pick a wordlist, upload one, or add hint words" }); return; }
+
+  const opts = optsFromForm(fd);
+  stateEl.textContent = "loading engine";
 
   let tester;
   try {

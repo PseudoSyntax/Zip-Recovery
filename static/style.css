@@ -63,3 +63,6 @@ details.settings > summary { cursor: pointer; font-weight: 700; padding: .5rem 0
 details.settings > summary::marker { color: var(--accent); }
 details.settings fieldset { margin-top: .6rem; }
 .budget-note { color: var(--muted); font-size: .82rem; margin: .7rem 0 0; }
+
+.wl-info { background: #141821; border: 1px solid var(--line); border-radius: 8px; padding: .6rem .8rem; color: #c4ccda; font-size: .86rem; margin-top: -.3rem; }
+select { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: .55rem .65rem; font: inherit; width: 100%; }

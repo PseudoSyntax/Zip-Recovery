@@ -124,6 +124,29 @@ Notes:
 - For a fully offline, no-CDN deployment, vendor the zip.js and 7z-wasm files
   into `docs/` and point the imports at the local copies.
 
+## Wordlist catalog
+
+Both web versions include a built-in picker of well-known wordlists
+(`wordlists.json`), each with a short description and an estimated run time that
+updates to the tries-per-second you enter. You can pick one or upload your own.
+
+| list | lines | notes |
+|------|-------|-------|
+| Top 1,000 (SecLists) | 1,000 | fast first pass |
+| Top 10,000 (SecLists) | 10,000 | sensible default |
+| Probable Top 12,000 (berzerk0) | 12,000 | sorted by real-world frequency |
+| Top 100,000 (SecLists) | 100,000 | broader coverage |
+| Top 1,000,000 (SecLists) | 1,000,000 | thorough, long run here |
+| rockyou.txt (full) | 14,344,392 | download + hashcat, too big for this tool |
+| Weakpass | varies | up to tens of GB, hashcat only |
+
+The self-hosted app downloads a chosen list server-side and caches it. The
+GitHub Pages version fetches the smaller lists straight into the browser over a
+CDN; the very large ones (rockyou, Weakpass) are linked for download and the
+hashcat path rather than run in the page. Because the tool tests one password
+per archive-open, the estimates make it obvious why the million-plus lists
+belong on the GPU path below.
+
 ## The fast path (true brute force)
 
 The recovery here tests one password per archive-open, which is ideal for recall

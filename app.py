@@ -25,17 +25,27 @@ Config via environment variables (all optional):
   ZR_WORK_DIR    scratch dir for uploads         (default: a temp dir)
 """
 
+import json
 import os
 import shutil
 import tempfile
 import threading
 import time
+import urllib.request
 import uuid
 
 from flask import Flask, jsonify, render_template, request, abort
 from werkzeug.utils import secure_filename
 
 import engine
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+try:
+    with open(os.path.join(HERE, "wordlists.json"), encoding="utf-8") as _f:
+        CATALOG = json.load(_f)
+except (OSError, ValueError):
+    CATALOG = {"note": "", "default_rate": 50, "lists": []}
+CATALOG_BY_ID = {e["id"]: e for e in CATALOG.get("lists", [])}
 
 # --------------------------------------------------------------------------- #
 
@@ -47,6 +57,8 @@ DEF_MAX_ATTEMPTS = int(os.environ.get("ZR_MAX_ATTEMPTS", "0"))   # 0 = unlimited
 DEF_MAX_SECONDS = int(os.environ.get("ZR_MAX_SECONDS", "0"))     # 0 = unlimited
 MAX_JOBS = int(os.environ.get("ZR_MAX_JOBS", "2"))
 WORK_DIR = os.environ.get("ZR_WORK_DIR") or tempfile.mkdtemp(prefix="ziprec-")
+CACHE_DIR = os.path.join(WORK_DIR, "wordlist-cache")
+FETCH_MAX_MB = int(os.environ.get("ZR_FETCH_MAX_MB", "200"))  # cap catalog downloads
 
 ALLOWED_EXT = {".7z", ".zip"}
 
@@ -123,23 +135,54 @@ def run_job(job_id, archive_path, wordlist_path, words, opts):
         job["state"] = "error"
         job["error"] = f"{type(e).__name__}: {e}"
     finally:
-        for path in (archive_path, wordlist_path):
-            if path and os.path.exists(path):
-                try:
-                    os.remove(path)
-                except OSError:
-                    pass
+        # remove this job's own uploads; the shared wordlist cache is elsewhere
+        shutil.rmtree(os.path.dirname(archive_path), ignore_errors=True)
 
 
 # --------------------------------------------------------------------------- #
 # Routes
 # --------------------------------------------------------------------------- #
 
+def fetch_wordlist(entry):
+    """Download a catalog wordlist to the cache (once) and return its path."""
+    url = entry.get("url")
+    if not entry.get("fetchable") or not url:
+        raise ValueError("this list is not fetchable here; download it and upload "
+                         "it, or use it with the hashcat path")
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    dest = os.path.join(CACHE_DIR, entry["id"] + ".txt")
+    if os.path.exists(dest) and os.path.getsize(dest) > 0:
+        return dest
+    limit = FETCH_MAX_MB * 1024 * 1024
+    tmp = dest + ".part"
+    req = urllib.request.Request(url, headers={"User-Agent": "Zip-Recovery"})
+    with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as out:
+        read = 0
+        while True:
+            chunk = r.read(65536)
+            if not chunk:
+                break
+            read += len(chunk)
+            if read > limit:
+                out.close()
+                os.remove(tmp)
+                raise ValueError(f"list exceeds the {FETCH_MAX_MB} MB fetch cap; "
+                                 f"raise ZR_FETCH_MAX_MB or download it yourself")
+            out.write(chunk)
+    os.replace(tmp, dest)
+    return dest
+
+
 @app.route("/")
 def index():
     return render_template("index.html", token_required=bool(TOKEN),
                            max_mb=MAX_MB, def_max_attempts=DEF_MAX_ATTEMPTS,
                            def_max_seconds=DEF_MAX_SECONDS)
+
+
+@app.route("/wordlists")
+def wordlists():
+    return jsonify(CATALOG)
 
 
 @app.route("/health")
@@ -171,15 +214,26 @@ def start():
 
     hints = [ln.strip() for ln in request.form.get("hints", "").splitlines()
              if ln.strip()]
-    wordlist_path = None
     wl = request.files.get("wordlist")
-    if wl and wl.filename:
+    wordlist_id = request.form.get("wordlist_id", "").strip()
+    wordlist_path = None
+    if wl and wl.filename:                       # an uploaded file always wins
         wordlist_path = os.path.join(job_dir, "wordlist.txt")
         wl.save(wordlist_path)
+    elif wordlist_id and wordlist_id != "none":  # otherwise a catalog pick
+        entry = CATALOG_BY_ID.get(wordlist_id)
+        if not entry:
+            shutil.rmtree(job_dir, ignore_errors=True)
+            abort(400, description="unknown wordlist selection")
+        try:
+            wordlist_path = fetch_wordlist(entry)
+        except Exception as e:
+            shutil.rmtree(job_dir, ignore_errors=True)
+            abort(400, description=f"could not fetch '{entry.get('name')}': {e}")
     words = engine.load_words([wordlist_path] if wordlist_path else [], hints)
     if not words:
         shutil.rmtree(job_dir, ignore_errors=True)
-        abort(400, description="give at least one hint word or upload a wordlist")
+        abort(400, description="choose a wordlist, upload one, or add hint words")
 
     kits = request.form.getlist("kits") or ["base", "case", "affix", "leet"]
     opts = {

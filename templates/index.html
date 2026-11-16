@@ -25,9 +25,20 @@
         <input type="file" name="archive" accept=".7z,.zip" required>
       </label>
 
-      <label class="big">2. Wordlist <span class="hint">(upload a list, one candidate per line)</span>
-        <input type="file" name="wordlist" accept=".txt,.lst,.dic,.wordlist">
+      <label class="big">2. Wordlist <span class="hint">(pick one, or upload your own below)</span>
+        <select name="wordlist_id" id="wordlist_id">
+          <option value="none">None (use my own words / upload)</option>
+        </select>
       </label>
+      <div id="wl-info" class="wl-info" hidden></div>
+      <div class="row">
+        <label>Your speed <span class="hint">tries/sec, for the estimate</span>
+          <input type="number" id="rate" value="50" min="1">
+        </label>
+        <label>Or upload a wordlist
+          <input type="file" name="wordlist" accept=".txt,.lst,.dic,.wordlist">
+        </label>
+      </div>
 
       <label>Extra words <span class="hint">(optional, one per line, tried first)</span>
         <textarea name="hints" rows="4" placeholder="Fluffy&#10;Summer2019&#10;my usual base word"></textarea>
@@ -91,6 +102,42 @@
     const cancelBtn = document.getElementById('cancel');
     const goBtn = document.getElementById('go');
     let timer = null, jobId = null, token = '';
+
+    // ---- wordlist catalog ----
+    const wlSelect = document.getElementById('wordlist_id');
+    const wlInfo = document.getElementById('wl-info');
+    const rateEl = document.getElementById('rate');
+    let catalog = [];
+
+    function fmtDuration(sec) {
+      if (!isFinite(sec) || sec <= 0) return 'instant';
+      const u = [['day', 86400], ['hour', 3600], ['min', 60], ['sec', 1]];
+      for (const [name, s] of u) {
+        if (sec >= s) { const n = Math.round(sec / s); return `${n} ${name}${n !== 1 ? 's' : ''}`; }
+      }
+      return '<1 sec';
+    }
+    function renderWlInfo() {
+      const e = catalog.find(x => x.id === wlSelect.value);
+      if (!e) { wlInfo.hidden = true; return; }
+      const rate = Math.max(1, parseInt(rateEl.value || '50', 10));
+      let est = e.lines ? `~${fmtDuration(e.lines / rate)} at ${rate}/s` : 'n/a';
+      let line = `${e.description} (${(e.lines || 0).toLocaleString()} lines, ${e.size}; est ${est})`;
+      if (!e.fetchable) line += ` — not run here; download: ${e.download_url}`;
+      wlInfo.textContent = line;
+      wlInfo.hidden = false;
+    }
+    fetch('wordlists').then(r => r.json()).then(data => {
+      catalog = data.lists || [];
+      rateEl.value = data.default_rate || 50;
+      for (const e of catalog) {
+        const o = document.createElement('option');
+        o.value = e.id; o.textContent = e.name + (e.fetchable ? '' : '  (download / hashcat)');
+        wlSelect.appendChild(o);
+      }
+    }).catch(() => {});
+    wlSelect.addEventListener('change', renderWlInfo);
+    rateEl.addEventListener('input', renderWlInfo);
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();

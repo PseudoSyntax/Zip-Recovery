@@ -1,0 +1,92 @@
+{
+  "note": "Curated, well-known password wordlists. Times are rough estimates for this tool's one-attempt-per-open testing; the browser .7z path is slower and GPU tools (hashcat) are far faster. Estimates are for the raw list, before rule kits expand it.",
+  "default_rate": 50,
+  "lists": [
+    {
+      "id": "top-1k",
+      "name": "Top 1,000 common passwords",
+      "source": "SecLists",
+      "source_url": "https://github.com/danielmiessler/SecLists",
+      "url": "https://cdn.jsdelivr.net/gh/danielmiessler/SecLists@master/Passwords/Common-Credentials/10-million-password-list-top-1000.txt",
+      "lines": 1000,
+      "size": "8 KB",
+      "fetchable": true,
+      "category": "quick",
+      "description": "The 1,000 most common passwords. A fast first pass that catches the laziest, most predictable choices. Run this before anything else."
+    },
+    {
+      "id": "top-10k",
+      "name": "Top 10,000 common passwords",
+      "source": "SecLists",
+      "source_url": "https://github.com/danielmiessler/SecLists",
+      "url": "https://cdn.jsdelivr.net/gh/danielmiessler/SecLists@master/Passwords/Common-Credentials/10-million-password-list-top-10000.txt",
+      "lines": 10000,
+      "size": "82 KB",
+      "fetchable": true,
+      "category": "common",
+      "description": "The 10,000 most common passwords. A sensible default: broad enough to catch most weak passwords, small enough to finish quickly."
+    },
+    {
+      "id": "probable-12k",
+      "name": "Probable Top 12,000",
+      "source": "berzerk0/Probable-Wordlists",
+      "source_url": "https://github.com/berzerk0/Probable-Wordlists",
+      "url": "https://cdn.jsdelivr.net/gh/berzerk0/Probable-Wordlists@master/Real-Passwords/Top12Thousand-probable-v2.txt",
+      "lines": 12000,
+      "size": "110 KB",
+      "fetchable": true,
+      "category": "common",
+      "description": "Real breach passwords sorted by how often they actually appear, not alphabetically. High hit rate for its size, and it matches how this tool already orders candidates."
+    },
+    {
+      "id": "top-100k",
+      "name": "Top 100,000 common passwords",
+      "source": "SecLists",
+      "source_url": "https://github.com/danielmiessler/SecLists",
+      "url": "https://cdn.jsdelivr.net/gh/danielmiessler/SecLists@master/Passwords/Common-Credentials/10-million-password-list-top-100000.txt",
+      "lines": 100000,
+      "size": "820 KB",
+      "fetchable": true,
+      "category": "broad",
+      "description": "The 100,000 most common passwords. Broader coverage for when the smaller lists miss. Still finishes in a reasonable time on this tool."
+    },
+    {
+      "id": "top-1m",
+      "name": "Top 1,000,000 common passwords",
+      "source": "SecLists",
+      "source_url": "https://github.com/danielmiessler/SecLists",
+      "url": "https://cdn.jsdelivr.net/gh/danielmiessler/SecLists@master/Passwords/Common-Credentials/10-million-password-list-top-1000000.txt",
+      "lines": 1000000,
+      "size": "8.6 MB",
+      "fetchable": true,
+      "category": "broad",
+      "description": "The classic one-million most common passwords. Thorough, but expect a long run on this tool. For a list this size, the hashcat path is usually the better choice."
+    },
+    {
+      "id": "rockyou",
+      "name": "rockyou.txt (full)",
+      "source": "2009 RockYou breach, via SecLists",
+      "source_url": "https://github.com/danielmiessler/SecLists/tree/master/Passwords/Leaked-Databases",
+      "url": null,
+      "download_url": "https://github.com/danielmiessler/SecLists/raw/master/Passwords/Leaked-Databases/rockyou.txt.tar.gz",
+      "lines": 14344392,
+      "size": "134 MB uncompressed",
+      "fetchable": false,
+      "category": "huge",
+      "description": "The famous list of ~14.3 million real passwords from the 2009 RockYou breach, the long-standing default for password cracking. Far too large for this tool's one-at-a-time testing. Download it and run it through hashcat instead."
+    },
+    {
+      "id": "weakpass",
+      "name": "Weakpass (compiled lists)",
+      "source": "weakpass.com",
+      "source_url": "https://weakpass.com/download",
+      "url": null,
+      "download_url": "https://weakpass.com/download",
+      "lines": null,
+      "size": "up to tens of GB",
+      "fetchable": false,
+      "category": "huge",
+      "description": "Large compiled and curated wordlists, from hundreds of MB to tens of GB. GPU cracking territory only, listed here for when you move to the hashcat path."
+    }
+  ]
+}
