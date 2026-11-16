@@ -168,10 +168,21 @@ def parse_range(spec):
 # --------------------------------------------------------------------------- #
 
 def detect_cli():
+    # 1. anything on PATH
     for exe in ("7z", "7za", "7zz", "7zr", "7z.exe", "7za.exe"):
         path = shutil.which(exe)
         if path:
             return path
+    # 2. common install locations not on PATH (Windows 7-Zip especially)
+    candidates = [
+        r"C:\Program Files\7-Zip\7z.exe",
+        r"C:\Program Files (x86)\7-Zip\7z.exe",
+        "/usr/bin/7z", "/usr/local/bin/7z", "/opt/homebrew/bin/7z",
+        "/usr/bin/7zz", "/usr/local/bin/7zz", "/opt/homebrew/bin/7zz",
+    ]
+    for cand in candidates:
+        if os.path.isfile(cand):
+            return cand
     return None
 
 
@@ -184,24 +195,21 @@ class Py7zrBackend:
         self.archive = archive
 
     def try_password(self, pw):
-        # py7zr's test() returns True if every CRC validates, False on a CRC
-        # mismatch (i.e. wrong password), and None when the archive carries no
-        # CRC to check. A wrong password usually returns False or raises; it
-        # must NOT be treated as success, so we check the result explicitly.
+        # The reliable way to verify a 7z password in py7zr is to actually
+        # decrypt and decompress the data: a wrong password raises during
+        # extraction (bad AES key -> corrupt LZMA stream / CRC error). test()
+        # alone is unreliable across archives, so we extract to a throwaway
+        # temp dir and treat "no exception" as success.
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix="zr7z-")
         try:
             with self._py7zr.SevenZipFile(self.archive, mode="r", password=pw) as z:
-                result = z.test()
-            if result is True:
-                return True
-            if result is False:
-                return False
-            # result is None: no CRC present, so verify by fully reading the
-            # data with this password (a wrong one raises a decompression error)
-            with self._py7zr.SevenZipFile(self.archive, mode="r", password=pw) as z:
-                z.readall()
+                z.extractall(path=tmp)
             return True
         except Exception:
             return False
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 class CliBackend:

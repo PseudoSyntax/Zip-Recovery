@@ -39,7 +39,10 @@ jobs:
       - name: Build test fixtures
         run: |
           New-Item -ItemType Directory -Force -Path smoke | Out-Null
-          Set-Content -Path smoke\secret.txt -Value "it worked"
+          # a few KB of text, so decompressing with a wrong password reliably
+          # fails (a tiny payload can decrypt to garbage that still "parses")
+          $body = ("the quick brown fox jumps over the lazy dog " * 200)
+          Set-Content -Path smoke\secret.txt -Value $body
           & "C:\Program Files\7-Zip\7z.exe" a -tzip -pSmokeTest123 smoke\test.zip smoke\secret.txt
           & "C:\Program Files\7-Zip\7z.exe" a -t7z -pSmokeTest123 smoke\test.7z smoke\secret.txt
 
@@ -52,13 +55,24 @@ jobs:
           Write-Host "OK: recall.exe recovered the .zip test password"
           Remove-Item found_password.txt
 
-      - name: Smoke test recall.exe against a real .7z
+      - name: Smoke test recall.exe against a real .7z (auto backend)
         run: |
           .\dist\recall.exe smoke\test.7z -H SmokeTest -H wrongword --kits base,case,affix --digits 100-123 --max-seconds 60
-          if (-not (Test-Path found_password.txt)) { throw "recall.exe did not find the test password (.7z)" }
+          if (-not (Test-Path found_password.txt)) { throw "recall.exe did not find the test password (.7z auto)" }
           $found = Get-Content found_password.txt
-          if ($found -ne "SmokeTest123") { throw "recall.exe found '$found', expected 'SmokeTest123' (.7z)" }
-          Write-Host "OK: recall.exe recovered the .7z test password"
+          if ($found -ne "SmokeTest123") { throw "recall.exe found '$found', expected 'SmokeTest123' (.7z auto)" }
+          Write-Host "OK: recall.exe recovered the .7z test password (auto backend)"
+          Remove-Item found_password.txt
+
+      - name: Smoke test recall.exe against a real .7z (force py7zr backend)
+        run: |
+          # exercise the pure-Python fallback directly: it must find the right
+          # password AND not accept a wrong one (the 'SmokeTest' hint is tried first)
+          .\dist\recall.exe smoke\test.7z --backend py7zr -H SmokeTest -H wrongword --kits base,case,affix --digits 100-123 --max-seconds 120
+          if (-not (Test-Path found_password.txt)) { throw "py7zr backend did not find the test password (.7z)" }
+          $found = Get-Content found_password.txt
+          if ($found -ne "SmokeTest123") { throw "py7zr backend found '$found', expected 'SmokeTest123'" }
+          Write-Host "OK: py7zr backend recovered the .7z test password and rejected wrong ones"
           Remove-Item found_password.txt
 
       - name: Smoke test ZipRecovery.exe (web app) starts and serves
