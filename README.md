@@ -5,6 +5,9 @@ and/or the words you think you might have used, and it generates variations
 (case changes, leetspeak, appended years/numbers/symbols, two-word combos) and
 tests each one against the archive until it finds the password.
 
+**Try it in your browser: <https://pseudosyntax.github.io/Zip-Recovery/>** — the
+client-side version runs entirely on your machine; nothing is uploaded.
+
 It comes in three forms:
 
 1. **`recall.py`** — a command-line tool.
@@ -127,9 +130,11 @@ is no server: your archive and wordlist are read with the File API and tested
 locally, and nothing is uploaded. The page downloads only the decryption
 library code from a CDN.
 
-To publish it: in the repo, go to **Settings → Pages**, set **Source** to
-*Deploy from a branch*, pick **`main`** and the **`/docs`** folder, and save.
-Your copy will be live at `https://pseudosyntax.github.io/Zip-Recovery/`.
+**It is live at <https://pseudosyntax.github.io/Zip-Recovery/>.**
+
+It is served from the **`/docs`** folder on **`main`** (repo **Settings →
+Pages**, source *Deploy from a branch*), so any push that changes `docs/`
+redeploys it.
 
 To run it locally instead:
 
