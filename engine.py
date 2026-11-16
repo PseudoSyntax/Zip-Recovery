@@ -184,9 +184,21 @@ class Py7zrBackend:
         self.archive = archive
 
     def try_password(self, pw):
+        # py7zr's test() returns True if every CRC validates, False on a CRC
+        # mismatch (i.e. wrong password), and None when the archive carries no
+        # CRC to check. A wrong password usually returns False or raises; it
+        # must NOT be treated as success, so we check the result explicitly.
         try:
             with self._py7zr.SevenZipFile(self.archive, mode="r", password=pw) as z:
-                z.test()
+                result = z.test()
+            if result is True:
+                return True
+            if result is False:
+                return False
+            # result is None: no CRC present, so verify by fully reading the
+            # data with this password (a wrong one raises a decompression error)
+            with self._py7zr.SevenZipFile(self.archive, mode="r", password=pw) as z:
+                z.readall()
             return True
         except Exception:
             return False
