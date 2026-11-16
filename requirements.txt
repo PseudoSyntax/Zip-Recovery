@@ -1,0 +1,7 @@
+# Web UI
+Flask>=3.0
+
+# Optional but recommended: lets the tool handle .7z (and AES .zip) without
+# needing the 7z binary on the host. If you have the 7z CLI installed you can
+# skip this.
+py7zr>=0.21

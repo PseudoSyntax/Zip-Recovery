@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+ziprec-*/
+found_password.txt
+*.7z
+*.zip
+!sample/*.zip
+.DS_Store

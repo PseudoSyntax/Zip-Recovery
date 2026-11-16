@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Zip-Recovery</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Zip&#8209;Recovery</h1>
+      <p class="sub">Recover the password to a <code>.7z</code> or <code>.zip</code>
+         archive you own, by testing variations of words you might have used.</p>
+    </header>
+
+    <p class="notice">For archives you own. Feed it words you remember and it
+       works outward from there. This is a recall helper, not a mass cracker.</p>
+
+    <form id="form">
+      {% if token_required %}
+      <label>Access token
+        <input type="password" name="token" placeholder="required on this server" autocomplete="off">
+      </label>
+      {% endif %}
+
+      <label>Archive <span class="hint">(.7z or .zip, up to {{ max_mb }} MB)</span>
+        <input type="file" name="archive" accept=".7z,.zip" required>
+      </label>
+
+      <label>Words you might have used <span class="hint">(one per line, tried first)</span>
+        <textarea name="hints" rows="5" placeholder="Fluffy&#10;Summer2019&#10;my usual base word"></textarea>
+      </label>
+
+      <label>Optional wordlist file <span class="hint">(one candidate per line)</span>
+        <input type="file" name="wordlist" accept=".txt,.lst,.dic">
+      </label>
+
+      <fieldset>
+        <legend>Rule kits</legend>
+        <label class="chk"><input type="checkbox" name="kits" value="base" checked> base</label>
+        <label class="chk"><input type="checkbox" name="kits" value="case" checked> case</label>
+        <label class="chk"><input type="checkbox" name="kits" value="affix" checked> affix (years/numbers/symbols)</label>
+        <label class="chk"><input type="checkbox" name="kits" value="leet" checked> leet</label>
+        <label class="chk"><input type="checkbox" name="kits" value="dup"> dup/reverse</label>
+        <label class="chk"><input type="checkbox" name="kits" value="combo"> combo (two words)</label>
+      </fieldset>
+
+      <div class="row">
+        <label>Years <input type="text" name="years" value="2015-2026"></label>
+        <label>Digit runs <input type="text" name="digits" value="0-99"></label>
+      </div>
+
+      <button type="submit" id="go">Start recovery</button>
+    </form>
+
+    <section id="panel" hidden>
+      <div class="status">
+        <span id="state" class="badge">running</span>
+        <span id="meta"></span>
+      </div>
+      <pre id="log"></pre>
+      <div id="result" hidden></div>
+      <button id="cancel" hidden>Stop</button>
+    </section>
+
+    <footer>Self&#8209;hosted. Keep it on localhost or behind an access token.</footer>
+  </main>
+
+  <script>
+    const form = document.getElementById('form');
+    const panel = document.getElementById('panel');
+    const stateEl = document.getElementById('state');
+    const metaEl = document.getElementById('meta');
+    const logEl = document.getElementById('log');
+    const resultEl = document.getElementById('result');
+    const cancelBtn = document.getElementById('cancel');
+    const goBtn = document.getElementById('go');
+    let timer = null, jobId = null, token = '';
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      token = fd.get('token') || '';
+      goBtn.disabled = true;
+      resultEl.hidden = true; resultEl.textContent = '';
+      panel.hidden = false; stateEl.textContent = 'starting';
+      stateEl.className = 'badge';
+      logEl.textContent = '';
+      try {
+        const r = await fetch('start', { method: 'POST', body: fd });
+        const data = await r.json();
+        if (!r.ok) { throw new Error(data.error || 'failed to start'); }
+        jobId = data.job_id;
+        cancelBtn.hidden = false;
+        poll();
+        timer = setInterval(poll, 1000);
+      } catch (err) {
+        stateEl.textContent = 'error'; stateEl.className = 'badge err';
+        logEl.textContent = err.message;
+        goBtn.disabled = false;
+      }
+    });
+
+    cancelBtn.addEventListener('click', async () => {
+      if (!jobId) return;
+      await fetch('cancel/' + jobId, {
+        method: 'POST',
+        headers: token ? { 'X-Access-Token': token } : {}
+      });
+    });
+
+    async function poll() {
+      if (!jobId) return;
+      const url = 'status/' + jobId + (token ? ('?token=' + encodeURIComponent(token)) : '');
+      const r = await fetch(url);
+      const j = await r.json();
+      if (!r.ok) return;
+      stateEl.textContent = j.state;
+      metaEl.textContent = `${j.tried || 0} tried` +
+        (j.rate ? ` at ${j.rate}/s` : '') +
+        (j.backend ? ` via ${j.backend}` : '');
+      if (j.last) logEl.textContent = 'last candidate: ' + j.last;
+
+      if (['found', 'exhausted', 'cancelled', 'error'].includes(j.state)) {
+        clearInterval(timer); cancelBtn.hidden = true; goBtn.disabled = false;
+        stateEl.className = 'badge ' + (j.state === 'found' ? 'ok' : 'err');
+        resultEl.hidden = false;
+        if (j.state === 'found') {
+          resultEl.innerHTML = 'Password found: <code class="pw"></code>';
+          resultEl.querySelector('.pw').textContent = j.password;
+        } else if (j.state === 'exhausted') {
+          resultEl.textContent =
+            'No match in the generated candidates. Add more words, or enable more kits / widen years.';
+        } else if (j.state === 'cancelled') {
+          resultEl.textContent = 'Stopped.';
+        } else {
+          resultEl.textContent = 'Error: ' + (j.error || 'unknown');
+        }
+      }
+    }
+  </script>
+</body>
+</html>
