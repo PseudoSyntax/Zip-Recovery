@@ -28,6 +28,7 @@ Config via environment variables (all optional):
 import json
 import os
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -39,7 +40,14 @@ from werkzeug.utils import secure_filename
 
 import engine
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+# When run from source, data files (templates/, static/, wordlists.json) sit
+# next to this file. When frozen into a PyInstaller executable (--onefile),
+# they're unpacked into a temp dir at sys._MEIPASS instead.
+if getattr(sys, "frozen", False):
+    HERE = sys._MEIPASS
+else:
+    HERE = os.path.dirname(os.path.abspath(__file__))
+
 try:
     with open(os.path.join(HERE, "wordlists.json"), encoding="utf-8") as _f:
         CATALOG = json.load(_f)
@@ -62,7 +70,9 @@ FETCH_MAX_MB = int(os.environ.get("ZR_FETCH_MAX_MB", "200"))  # cap catalog down
 
 ALLOWED_EXT = {".7z", ".zip"}
 
-app = Flask(__name__)
+app = Flask(__name__,
+           template_folder=os.path.join(HERE, "templates"),
+           static_folder=os.path.join(HERE, "static"))
 app.config["MAX_CONTENT_LENGTH"] = MAX_MB * 1024 * 1024
 
 JOBS = {}
@@ -309,4 +319,8 @@ def _startup_banner():
 
 if __name__ == "__main__":
     _startup_banner()
+    if getattr(sys, "frozen", False):
+        # double-clicked exe, no terminal to read the URL from: open it for them
+        import webbrowser
+        threading.Timer(1.0, lambda: webbrowser.open(f"http://{HOST}:{PORT}")).start()
     app.run(host=HOST, port=PORT, threaded=True)

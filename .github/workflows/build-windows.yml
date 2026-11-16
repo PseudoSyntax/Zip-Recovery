@@ -1,0 +1,94 @@
+name: Build Windows executables
+
+on:
+  workflow_dispatch: {}
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Build recall.exe (CLI tool)
+        run: |
+          pyinstaller --onefile --name recall --collect-all py7zr recall.py
+
+      - name: Build ZipRecovery.exe (web app)
+        run: |
+          pyinstaller --onefile --name ZipRecovery --collect-all py7zr `
+            --add-data "templates;templates" `
+            --add-data "static;static" `
+            --add-data "wordlists.json;." `
+            app.py
+
+      # windows-latest ships 7-Zip at this path; use it to build real
+      # password-protected fixtures so the smoke tests below are genuine
+      # end-to-end checks, not just "the exe launched".
+      - name: Build test fixtures
+        run: |
+          New-Item -ItemType Directory -Force -Path smoke | Out-Null
+          Set-Content -Path smoke\secret.txt -Value "it worked"
+          & "C:\Program Files\7-Zip\7z.exe" a -tzip -pSmokeTest123 smoke\test.zip smoke\secret.txt
+          & "C:\Program Files\7-Zip\7z.exe" a -t7z -pSmokeTest123 smoke\test.7z smoke\secret.txt
+
+      - name: Smoke test recall.exe against a real .zip
+        run: |
+          .\dist\recall.exe smoke\test.zip -H SmokeTest -H wrongword --kits base,case,affix --digits 100-123 --max-seconds 60
+          if (-not (Test-Path found_password.txt)) { throw "recall.exe did not find the test password" }
+          $found = Get-Content found_password.txt
+          if ($found -ne "SmokeTest123") { throw "recall.exe found '$found', expected 'SmokeTest123'" }
+          Write-Host "OK: recall.exe recovered the .zip test password"
+          Remove-Item found_password.txt
+
+      - name: Smoke test recall.exe against a real .7z
+        run: |
+          .\dist\recall.exe smoke\test.7z -H SmokeTest -H wrongword --kits base,case,affix --digits 100-123 --max-seconds 60
+          if (-not (Test-Path found_password.txt)) { throw "recall.exe did not find the test password (.7z)" }
+          $found = Get-Content found_password.txt
+          if ($found -ne "SmokeTest123") { throw "recall.exe found '$found', expected 'SmokeTest123' (.7z)" }
+          Write-Host "OK: recall.exe recovered the .7z test password"
+          Remove-Item found_password.txt
+
+      - name: Smoke test ZipRecovery.exe (web app) starts and serves
+        run: |
+          $proc = Start-Process -FilePath ".\dist\ZipRecovery.exe" -PassThru -WindowStyle Hidden
+          Start-Sleep -Seconds 4
+          try {
+            $resp = Invoke-WebRequest -Uri "http://127.0.0.1:8000/health" -UseBasicParsing -TimeoutSec 10
+            if ($resp.Content -notmatch '"ok":\s*true') { throw "unexpected /health response: $($resp.Content)" }
+            $wl = Invoke-WebRequest -Uri "http://127.0.0.1:8000/wordlists" -UseBasicParsing -TimeoutSec 10
+            if ($wl.Content -notmatch '"lists"') { throw "unexpected /wordlists response" }
+            Write-Host "OK: ZipRecovery.exe served /health and /wordlists"
+          } finally {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: zip-recovery-windows
+          path: |
+            dist/recall.exe
+            dist/ZipRecovery.exe
+          if-no-files-found: error
+
+      - name: Create GitHub Release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/recall.exe
+            dist/ZipRecovery.exe
+          generate_release_notes: true
