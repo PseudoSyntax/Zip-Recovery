@@ -145,10 +145,14 @@ function renderWlInfo() {
   info.hidden = false;
 }
 
+const listTextCache = new Map();
 async function fetchCatalogList(entry) {
+  if (listTextCache.has(entry.id)) return listTextCache.get(entry.id);
   const r = await fetch(entry.url);
   if (!r.ok) throw new Error(`fetching ${entry.url} returned HTTP ${r.status}`);
-  return await r.text();
+  const t = await r.text();
+  listTextCache.set(entry.id, t);
+  return t;
 }
 
 fetch("./wordlists.json").then((r) => r.json()).then((data) => {
@@ -162,7 +166,83 @@ fetch("./wordlists.json").then((r) => r.json()).then((data) => {
     sel.appendChild(o);
   }
   sel.addEventListener("change", renderWlInfo);
+  populateCheckList();
 }).catch((err) => console.error("[zip-recovery] catalog load failed:", err));
+
+// --------------------------------------------------------------------------- //
+// Password checker: is an exact password already in a bundled list?
+// --------------------------------------------------------------------------- //
+
+function populateCheckList() {
+  const sel = $("check_list");
+  if (!sel) return;
+  sel.innerHTML = "";
+  const all = document.createElement("option");
+  all.value = "__all__"; all.textContent = "All bundled lists";
+  sel.appendChild(all);
+  for (const e of catalog.filter((x) => x.fetchable && x.url)) {
+    const o = document.createElement("option");
+    o.value = e.id; o.textContent = e.name;
+    sel.appendChild(o);
+  }
+}
+
+// Line index of an exact match, or -1. Lists are frequency-sorted, so the
+// index doubles as a rough "how common" rank (0 = most common).
+function findRank(text, pw) {
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].replace(/\r$/, "") === pw) return i;
+  }
+  return -1;
+}
+
+async function checkPassword(e) {
+  e.preventDefault();
+  const pw = $("check_pw").value;
+  const out = $("check-result");
+  const btn = $("check-go");
+  if (!pw) { out.hidden = false; out.className = "check-result"; out.textContent = "Type a password to check."; return; }
+
+  btn.disabled = true;
+  out.hidden = false; out.className = "check-result"; out.textContent = "checking…";
+
+  const selVal = $("check_list").value;
+  const lists = selVal === "__all__"
+    ? catalog.filter((x) => x.fetchable && x.url)
+    : [catalog.find((x) => x.id === selVal)].filter(Boolean);
+
+  const hits = [];
+  try {
+    for (const entry of lists) {
+      const text = await fetchCatalogList(entry);
+      const idx = findRank(text, pw);
+      if (idx >= 0) hits.push({ name: entry.name, rank: idx + 1, total: entry.lines });
+    }
+  } catch (err) {
+    btn.disabled = false;
+    out.className = "check-result err";
+    out.textContent = "Error: " + describeError(err) + " (see console)";
+    console.error("[zip-recovery] check failed:", err);
+    return;
+  }
+  btn.disabled = false;
+
+  if (hits.length) {
+    out.className = "check-result err";
+    const parts = hits.map((h) => `${h.name} (rank ${h.rank.toLocaleString()} of ${(h.total || 0).toLocaleString()})`);
+    out.textContent = "⚠ This password is in: " + parts.join(", ") +
+      ". It is a known, crackable password; do not use it for anything you care about.";
+  } else {
+    out.className = "check-result ok";
+    out.textContent = "✓ Not found in " +
+      (selVal === "__all__" ? "any bundled list" : (lists[0] ? lists[0].name : "that list")) +
+      ". (Being absent from these lists does not by itself prove a password is strong.)";
+  }
+}
+
+const checkForm = $("check-form");
+if (checkForm) checkForm.addEventListener("submit", checkPassword);
 
 // --------------------------------------------------------------------------- //
 // In-browser password testers. Each returns async (pw) => bool.

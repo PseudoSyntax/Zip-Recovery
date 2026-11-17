@@ -93,6 +93,21 @@
       <button id="cancel" hidden>Stop</button>
     </section>
 
+    <section class="checker">
+      <h2>Check a password</h2>
+      <p class="sub">See whether an exact password already appears in a bundled list. Runs in your browser; nothing is sent anywhere.</p>
+      <form id="check-form">
+        <label class="big">Password
+          <input type="text" name="check_pw" id="check_pw" placeholder="type a password to look up" autocomplete="off" spellcheck="false">
+        </label>
+        <label>In list
+          <select id="check_list"></select>
+        </label>
+        <button type="submit" id="check-go">Check</button>
+      </form>
+      <div id="check-result" class="check-result" hidden></div>
+    </section>
+
     <footer>
       Runs fully client&#8209;side. <code>.zip</code> uses
       <a href="https://github.com/gildas-lormeau/zip.js" target="_blank" rel="noopener">zip.js</a>;

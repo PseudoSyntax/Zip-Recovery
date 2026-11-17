@@ -113,3 +113,10 @@ select { background: var(--panel); color: var(--ink); border: 1px solid var(--li
 /* clone-and-run command block for too-big lists */
 .cmd-note { margin-top: .55rem; color: var(--muted); font-size: .82rem; }
 .cmds { background: #0c0e12; border: 1px solid var(--line); border-radius: 8px; padding: .6rem .7rem; margin: .45rem 0; font-size: .75rem; line-height: 1.55; color: #c9d3e3; overflow-x: auto; white-space: pre; font-family: ui-monospace, Menlo, Consolas, monospace; }
+/* password checker */
+.checker { margin-top: 2.2rem; padding-top: 1.6rem; border-top: 1px solid var(--line); }
+.checker h2 { font-size: 1.2rem; margin: 0 0 .25rem; letter-spacing: -.01em; }
+#check-form { display: flex; flex-direction: column; gap: .9rem; margin-top: 1rem; }
+.check-result { margin-top: 1rem; padding: .8rem 1rem; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); font-size: .9rem; line-height: 1.5; }
+.check-result.ok { border-color: var(--ok); background: #0f3a2c; color: #d7ffe9; }
+.check-result.err { border-color: var(--err); background: #3a1313; color: #ffd9d9; }
