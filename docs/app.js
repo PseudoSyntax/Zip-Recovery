@@ -20,10 +20,12 @@ const goBtn = $("go");
 const cancelBtn = $("cancel");
 const progressEl = $("progress");
 const progressFill = $("progress-fill");
+const resumeBtn = $("resume");
 
 let cancelFlag = false;
 let catalog = [];
 let rate = 50; // tries/sec, only used for the rough estimate; self-calibrates
+let resumeState = null; // set when a run is stopped, so Resume can continue
 
 // --------------------------------------------------------------------------- //
 // Error reporting: make every failure specific and log the full detail.
@@ -382,119 +384,164 @@ function setProgress(tried, total) {
   progressFill.style.width = pct.toFixed(1) + "%";
 }
 
-// Run the generator over one word set, testing each candidate. Returns a result
-// object; carries the running "tried" count across lists via ctx.baseTried.
+// Run the generator over one word set, testing each candidate. ctx.skip is how
+// many candidates in this source were already tried before a stop (so Resume
+// skips them without re-testing). Returns the running total "tried" and how much
+// of this source is done ("doneInSource"), so a stop can be resumed exactly.
 async function testLoop(tester, words, opts, ctx) {
-  let tried = ctx.baseTried;
+  let skipped = 0, tested = 0;
+  const done = () => ctx.baseTried + ctx.skip + tested; // overall total
+  const result = (state, extra) => Object.assign(
+    { state, tried: done(), doneInSource: ctx.skip + tested }, extra || {});
+
   for (const pw of generate(words, opts)) {
-    if (cancelFlag) return { state: "cancelled", tried };
+    if (skipped < ctx.skip) {           // fast-forward over already-tried candidates
+      skipped++;
+      if (skipped % 50000 === 0) await new Promise((r) => setTimeout(r, 0));
+      continue;
+    }
+    if (cancelFlag) return result("cancelled");
     let ok;
     try { ok = await tester(pw); }
-    catch (err) { return { state: "error", tried, err }; }
-    tried++;
-    if (ok) return { state: "found", tried, password: pw };
+    catch (err) { return result("error", { err }); }
+    tested++;
+    if (ok) return result("found", { password: pw });
 
-    if (tried % 100 === 0) {
+    if (tested % 100 === 0) {
       const secs = (performance.now() - ctx.start) / 1000;
-      rate = Math.max(1, (tried - ctx.startedTried) / secs);
+      rate = Math.max(1, done() / Math.max(secs, 0.001));
       const where = ctx.count > 1 ? `  [list ${ctx.idx + 1}/${ctx.count}: ${ctx.label}]` : "";
-      metaEl.textContent = `${tried.toLocaleString()} tried, ${rate.toFixed(0)}/s (full speed)${where}`;
+      metaEl.textContent = `${done().toLocaleString()} tried, ${rate.toFixed(0)}/s (full speed)${where}`;
       logEl.textContent = "last candidate: " + pw.slice(0, 48);
-      setProgress(tried, ctx.total);
+      setProgress(done(), ctx.total);
       await new Promise((r) => setTimeout(r, 0));
-      if (opts.maxAttempts && tried >= opts.maxAttempts) return { state: "capped", tried };
-      if (opts.maxSeconds && secs >= opts.maxSeconds) return { state: "capped", tried };
+      if (opts.maxAttempts && done() >= opts.maxAttempts) return result("capped");
+      if (opts.maxSeconds && secs >= opts.maxSeconds) return result("capped");
     }
   }
-  return { state: "exhausted", tried };
+  return result("exhausted");
 }
 
-async function run(e) {
-  e.preventDefault();
+async function startRun(resume) {
   cancelFlag = false;
   lastStray = "";
-  const fd = new FormData(form);
-  const archive = fd.get("archive");
-  if (!archive || !archive.name) { alert("Choose an archive first."); return; }
-
-  const hints = (fd.get("hints") || "").split("\n").map((s) => s.trim()).filter(Boolean);
 
   goBtn.disabled = true;
   cancelBtn.hidden = false;
+  if (resumeBtn) resumeBtn.hidden = true;
   panel.hidden = false;
   resultEl.hidden = true;
   resultEl.className = "";
-  stateEl.textContent = "preparing";
   stateEl.className = "badge";
   logEl.textContent = "";
-  metaEl.textContent = "";
   progressEl.hidden = false;
-  progressFill.style.width = "0%";
 
-  const opts = optsFromForm(fd);
+  let sources, opts, hints, tester, total, start, baseTried, startIndex, firstSkip, firstWords;
 
-  // Build the ordered list of sources to try.
-  // Uploaded file wins; else "try all lists"; else the single pick; else hints only.
-  let sources;
-  const allLists = fd.get("all_lists");
-  const wlFile = fd.get("wordlist");
-  const wlId = fd.get("wordlist_id");
-  if (wlFile && wlFile.name) {
-    let t; try { t = await wlFile.text(); } catch (err) { return fail("reading your wordlist file", err); }
-    sources = [{ label: wlFile.name, text: t, lines: t.split("\n").length }];
-  } else if (allLists) {
-    sources = catalog.filter((x) => x.fetchable && x.url)
-      .map((x) => ({ id: x.id, label: x.name, lines: x.lines }));
-    if (!sources.length) sources = [{ label: "your words", text: "", lines: 0 }];
-  } else if (wlId && wlId !== "none") {
-    const picked = catalog.find((x) => x.id === wlId);
-    if (!picked) return fail("selecting a wordlist", new Error("unknown wordlist id " + wlId));
-    if (!picked.fetchable || !picked.url) {
-      return finish("error", { error: `"${picked.name}" is too large to run in the browser. ` +
-        `Use the clone-and-run commands shown under the list, or pick a smaller list.` });
-    }
-    sources = [{ id: picked.id, label: picked.name, lines: picked.lines }];
+  if (resume) {
+    sources = resume.sources; opts = resume.opts; hints = resume.hints; tester = resume.tester;
+    total = resume.total;
+    start = performance.now() - resume.elapsedMs;
+    baseTried = resume.tried - resume.doneInSource;
+    startIndex = resume.sourceIndex;
+    firstSkip = resume.doneInSource;
+    firstWords = resume.currentWords;
+    stateEl.textContent = "resuming";
+    setProgress(resume.tried, total);
   } else {
-    sources = [{ label: "your words", text: "", lines: 0 }];
-  }
-
-  // Estimate the grand total for the progress bar (hints count once).
-  let total = 0;
-  for (let i = 0; i < sources.length; i++) {
-    const nWords = (sources[i].lines || 0) + (i === 0 ? hints.length : 0);
-    total += estimateTotal(Math.max(1, nWords), opts);
-  }
-
-  stateEl.textContent = "starting engine";
-  let tester;
-  try { tester = await pickTester(archive); }
-  catch (err) { return fail("starting the decryption engine", err); }
-
-  const start = performance.now();
-  let tried = 0, anyWords = false;
-
-  for (let i = 0; i < sources.length; i++) {
-    if (cancelFlag) return finish("cancelled", { tried, start });
-    const src = sources[i];
-    let text = src.text;
-    if (text === undefined && src.id) {
-      stateEl.textContent = `loading ${src.label} (${i + 1}/${sources.length})`;
-      try { text = await fetchCatalogList(catalog.find((c) => c.id === src.id)); }
-      catch (err) { return fail(`loading the wordlist ${src.label}`, err, { tried, start }); }
+    resumeState = null;
+    const fd = new FormData(form);
+    const archive = fd.get("archive");
+    if (!archive || !archive.name) {
+      alert("Choose an archive first.");
+      goBtn.disabled = false; cancelBtn.hidden = true; panel.hidden = true; return;
     }
-    const words = loadWords(text || "", i === 0 ? hints : []);
+    hints = (fd.get("hints") || "").split("\n").map((s) => s.trim()).filter(Boolean);
+    opts = optsFromForm(fd);
+    stateEl.textContent = "preparing";
+    metaEl.textContent = "";
+    progressFill.style.width = "0%";
+
+    // Build the ordered list of sources: uploaded file wins; else all lists;
+    // else the single pick; else hints only.
+    const allLists = fd.get("all_lists");
+    const wlFile = fd.get("wordlist");
+    const wlId = fd.get("wordlist_id");
+    if (wlFile && wlFile.name) {
+      let t; try { t = await wlFile.text(); } catch (err) { return fail("reading your wordlist file", err); }
+      sources = [{ label: wlFile.name, text: t, lines: t.split("\n").length }];
+    } else if (allLists) {
+      sources = catalog.filter((x) => x.fetchable && x.url).map((x) => ({ id: x.id, label: x.name, lines: x.lines }));
+      if (!sources.length) sources = [{ label: "your words", text: "", lines: 0 }];
+    } else if (wlId && wlId !== "none") {
+      const picked = catalog.find((x) => x.id === wlId);
+      if (!picked) return fail("selecting a wordlist", new Error("unknown wordlist id " + wlId));
+      if (!picked.fetchable || !picked.url) {
+        return finish("error", { error: `"${picked.name}" is too large to run in the browser. ` +
+          `Use the clone-and-run commands shown under the list, or pick a smaller list.` });
+      }
+      sources = [{ id: picked.id, label: picked.name, lines: picked.lines }];
+    } else {
+      sources = [{ label: "your words", text: "", lines: 0 }];
+    }
+
+    total = 0;
+    for (let i = 0; i < sources.length; i++) {
+      const nWords = (sources[i].lines || 0) + (i === 0 ? hints.length : 0);
+      total += estimateTotal(Math.max(1, nWords), opts);
+    }
+
+    stateEl.textContent = "starting engine";
+    try { tester = await pickTester(archive); }
+    catch (err) { return fail("starting the decryption engine", err); }
+
+    start = performance.now();
+    baseTried = 0; startIndex = 0; firstSkip = 0; firstWords = null;
+  }
+
+  let tried = resume ? resume.tried : 0;
+  let anyWords = false;
+
+  for (let i = startIndex; i < sources.length; i++) {
+    if (cancelFlag) {
+      resumeState = { sources, opts, hints, tester, total, sourceIndex: i,
+        doneInSource: (i === startIndex ? firstSkip : 0), tried,
+        elapsedMs: performance.now() - start,
+        currentWords: (i === startIndex ? firstWords : null) };
+      return finish("cancelled", { tried, start });
+    }
+    const src = sources[i];
+    let words;
+    if (i === startIndex && firstWords) {
+      words = firstWords;
+    } else {
+      let text = src.text;
+      if (text === undefined && src.id) {
+        stateEl.textContent = `loading ${src.label} (${i + 1}/${sources.length})`;
+        try { text = await fetchCatalogList(catalog.find((c) => c.id === src.id)); }
+        catch (err) { return fail(`loading the wordlist ${src.label}`, err, { tried, start }); }
+      }
+      words = loadWords(text || "", i === 0 ? hints : []);
+    }
     if (words.length) anyWords = true;
     stateEl.textContent = "running";
+    const skip = (i === startIndex) ? firstSkip : 0;
     const res = await testLoop(tester, words, opts,
-      { start, startedTried: tried, baseTried: tried, total, label: src.label, idx: i, count: sources.length });
+      { start, baseTried, skip, total, label: src.label, idx: i, count: sources.length });
     tried = res.tried;
-    if (res.state === "found") return finish("found", { password: res.password, tried, start, source: sources.length > 1 ? src.label : null });
-    if (res.state === "cancelled") return finish("cancelled", { tried, start });
-    if (res.state === "error") return fail("testing a password", res.err, { tried, start });
-    if (res.state === "capped") return finish("capped", { tried, start });
-    // exhausted this source: on to the next
+
+    if (res.state === "found") { resumeState = null; return finish("found", { password: res.password, tried, start, source: sources.length > 1 ? src.label : null }); }
+    if (res.state === "cancelled") {
+      resumeState = { sources, opts, hints, tester, total, sourceIndex: i,
+        doneInSource: res.doneInSource, tried, elapsedMs: performance.now() - start, currentWords: words };
+      return finish("cancelled", { tried, start });
+    }
+    if (res.state === "error") { resumeState = null; return fail("testing a password", res.err, { tried, start }); }
+    if (res.state === "capped") { resumeState = null; return finish("capped", { tried, start }); }
+    baseTried = res.tried; // exhausted this source; carry the total forward
   }
 
+  resumeState = null;
   if (!anyWords) return finish("error", { error: "no candidates: pick a wordlist, upload one, or add some hint words" });
   finish("exhausted", { tried, start });
 }
@@ -502,6 +549,7 @@ async function run(e) {
 function finish(state, info) {
   goBtn.disabled = false;
   cancelBtn.hidden = true;
+  if (resumeBtn) resumeBtn.hidden = !(state === "cancelled" && resumeState);
   stateEl.textContent = state === "capped" ? "stopped at limit" : state;
   stateEl.className = "badge " + (state === "found" ? "ok" : "err");
   resultEl.hidden = false;
@@ -530,21 +578,26 @@ function finish(state, info) {
     return;
   }
 
+  if (state === "cancelled") {
+    // keep the progress bar visible so Resume has context
+    resultEl.textContent = "Stopped. Press Resume to continue from here.";
+    return;
+  }
+
   progressEl.hidden = true;
   if (state === "exhausted") {
     resultEl.textContent =
       "No match across the whole candidate set. Add more words, enable more kits, widen the ranges, or try the 'all lists' option.";
   } else if (state === "capped") {
     resultEl.textContent = "Stopped at the attempt/time limit you set before finding a match.";
-  } else if (state === "cancelled") {
-    resultEl.textContent = "Stopped.";
   } else {
     resultEl.textContent = "Error: " + (info.error || "unknown") + "  (full detail in the browser console)";
   }
 }
 
-form.addEventListener("submit", run);
+form.addEventListener("submit", (e) => { e.preventDefault(); startRun(null); });
 cancelBtn.addEventListener("click", () => { cancelFlag = true; });
+if (resumeBtn) resumeBtn.addEventListener("click", () => { if (resumeState) startRun(resumeState); });
 
 const allEl = $("all_lists");
 if (allEl) allEl.addEventListener("change", () => {
