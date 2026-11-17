@@ -118,21 +118,73 @@
       }
       return '<1 sec';
     }
+    function archiveInfo() {
+      const inp = document.querySelector('input[name="archive"]');
+      const f = inp && inp.files && inp.files[0];
+      const name = f ? f.name : 'YOUR_ARCHIVE.7z';
+      const ext = name.toLowerCase().endsWith('.zip') ? 'zip' : '7z';
+      return { name, ext };
+    }
+    function commandsFor(entry) {
+      const { name, ext } = archiveInfo();
+      const q = /\s/.test(name) ? `"${name}"` : name;
+      const john = ext === 'zip' ? 'zip2john' : '7z2john';
+      const mode = ext === 'zip' ? '13600' : '11600';
+      const modeNote = ext === 'zip' ? '   # WinZip AES; check zip2john output for the right -m' : '';
+      const L = ['# 1. get the tool', 'git clone https://github.com/PseudoSyntax/Zip-Recovery.git', 'cd Zip-Recovery', 'pip install -r requirements.txt', ''];
+      if (entry.id === 'rockyou') {
+        L.push('# 2. get rockyou (~134 MB)', 'curl -L -o rockyou.txt.tar.gz \\', '  ' + entry.download_url,
+          'tar -xzf rockyou.txt.tar.gz        # -> rockyou.txt', '', '# 3. run against your file',
+          `python recall.py ${q} -w rockyou.txt`, '', '# much faster (GPU brute force) instead of step 3:',
+          `${john} ${q} > hash.txt`, `hashcat -m ${mode} hash.txt rockyou.txt${modeNote}`);
+      } else {
+        L.push(`# 2. download a list from ${entry.download_url}`, '#    and save it as wordlist.txt in this folder',
+          '', '# 3. run against your file', `python recall.py ${q} -w wordlist.txt`, '',
+          '# much faster (GPU brute force):', `${john} ${q} > hash.txt`,
+          `hashcat -m ${mode} hash.txt wordlist.txt${modeNote}`);
+      }
+      return L.join('\n');
+    }
     function renderWlInfo() {
       const e = catalog.find(x => x.id === wlSelect.value);
+      wlInfo.innerHTML = '';
       if (!e) { wlInfo.hidden = true; return; }
       let est = e.lines ? `rough est ${fmtDuration(e.lines / estRate)}` : '';
-      let line = `${e.description} (${(e.lines || 0).toLocaleString()} lines, ${e.size}${est ? '; ' + est : ''})`;
-      if (!e.fetchable) line += ` — not run here; download: ${e.download_url}`;
-      wlInfo.textContent = line;
+      const desc = document.createElement('div');
+      desc.textContent = `${e.description} (${(e.lines || 0).toLocaleString()} lines, ${e.size}${est ? '; ' + est : ''})`;
+      wlInfo.appendChild(desc);
+      if (!e.fetchable) {
+        const note = document.createElement('div');
+        note.className = 'cmd-note';
+        note.textContent = e.server_fetch
+          ? 'This server will download it (~51 MB, first time) and run it, but it is slow on this one-at-a-time tester. For a list this size, the commands below (hashcat) are far faster:'
+          : 'Not run here (too big). Clone the tool and run it against your file:';
+        wlInfo.appendChild(note);
+        const pre = document.createElement('pre');
+        pre.className = 'cmds';
+        pre.textContent = commandsFor(e);
+        wlInfo.appendChild(pre);
+        const copy = document.createElement('button');
+        copy.type = 'button'; copy.className = 'copy'; copy.textContent = 'Copy commands';
+        copy.addEventListener('click', async () => {
+          try { await navigator.clipboard.writeText(pre.textContent); copy.textContent = 'Copied'; }
+          catch { copy.textContent = 'Copy failed'; }
+          setTimeout(() => { copy.textContent = 'Copy commands'; }, 1500);
+        });
+        wlInfo.appendChild(copy);
+      }
       wlInfo.hidden = false;
     }
+    document.querySelector('input[name="archive"]').addEventListener('change', () => {
+      const e = catalog.find(x => x.id === wlSelect.value);
+      if (e && !e.fetchable) renderWlInfo();
+    });
     fetch('wordlists').then(r => r.json()).then(data => {
       catalog = data.lists || [];
       estRate = data.default_rate || 50;
       for (const e of catalog) {
         const o = document.createElement('option');
-        o.value = e.id; o.textContent = e.name + (e.fetchable ? '' : '  (download / hashcat)');
+        o.value = e.id; o.textContent = e.name + (e.fetchable ? '' : (e.server_fetch ? '  (downloads on this server)' : '  (download / hashcat)'));
         wlSelect.appendChild(o);
       }
     }).catch(() => {});

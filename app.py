@@ -153,27 +153,12 @@ def run_job(job_id, archive_path, wordlist_path, words, opts):
 # Routes
 # --------------------------------------------------------------------------- #
 
-def fetch_wordlist(entry):
-    """Return a path to the catalog wordlist, reading it locally when it is
-    bundled in the repo (docs/wordlists/...) and only downloading otherwise."""
-    url = entry.get("url")
-    if not entry.get("fetchable") or not url:
-        raise ValueError("this list is not bundled here; download it and upload "
-                         "it, or use it with the hashcat path")
-    # bundled list shipped with the repo (and with the frozen exe)
-    if not url.lower().startswith(("http://", "https://")):
-        local = os.path.join(HERE, "docs", *url.split("/"))
-        if os.path.isfile(local):
-            return local
-        raise ValueError(f"bundled wordlist not found ({url})")
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    dest = os.path.join(CACHE_DIR, entry["id"] + ".txt")
-    if os.path.exists(dest) and os.path.getsize(dest) > 0:
-        return dest
+def _download(url, dest):
+    """Download url to dest, capped at FETCH_MAX_MB."""
     limit = FETCH_MAX_MB * 1024 * 1024
     tmp = dest + ".part"
     req = urllib.request.Request(url, headers={"User-Agent": "Zip-Recovery"})
-    with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as out:
+    with urllib.request.urlopen(req, timeout=120) as r, open(tmp, "wb") as out:
         read = 0
         while True:
             chunk = r.read(65536)
@@ -183,11 +168,71 @@ def fetch_wordlist(entry):
             if read > limit:
                 out.close()
                 os.remove(tmp)
-                raise ValueError(f"list exceeds the {FETCH_MAX_MB} MB fetch cap; "
-                                 f"raise ZR_FETCH_MAX_MB or download it yourself")
+                raise ValueError(f"download exceeds the {FETCH_MAX_MB} MB cap; "
+                                 f"raise ZR_FETCH_MAX_MB or fetch it yourself")
             out.write(chunk)
     os.replace(tmp, dest)
     return dest
+
+
+def fetch_and_extract(entry):
+    """Self-hosted only: download a big list (e.g. rockyou) and extract the
+    plain-text wordlist, caching the result. Handles .tar.gz / .gz / plain."""
+    import gzip
+    import tarfile
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    dest = os.path.join(CACHE_DIR, entry["id"] + ".txt")
+    if os.path.exists(dest) and os.path.getsize(dest) > 0:
+        return dest
+    url = entry["download_url"]
+    raw = os.path.join(CACHE_DIR, entry["id"] + "_dl")
+    _download(url, raw)
+    low = url.lower()
+    try:
+        if low.endswith((".tar.gz", ".tgz")):
+            with tarfile.open(raw, "r:gz") as tf:
+                members = [m for m in tf.getmembers() if m.isfile()]
+                member = next((m for m in members if m.name.endswith(".txt")), None) \
+                    or (members[0] if members else None)
+                if not member:
+                    raise ValueError("archive contained no file to extract")
+                with tf.extractfile(member) as src, open(dest, "wb") as out:
+                    shutil.copyfileobj(src, out)  # one member's bytes, no path traversal
+        elif low.endswith(".gz"):
+            with gzip.open(raw, "rb") as src, open(dest, "wb") as out:
+                shutil.copyfileobj(src, out)
+        else:
+            os.replace(raw, dest)
+            return dest
+    finally:
+        if os.path.exists(raw):
+            os.remove(raw)
+    return dest
+
+
+def fetch_wordlist(entry):
+    """Return a path to the catalog wordlist. Reads bundled lists locally,
+    downloads+extracts server-only big lists (server_fetch), and downloads
+    plain remote lists otherwise."""
+    url = entry.get("url")
+    # bundled list shipped with the repo (and with the frozen exe)
+    if entry.get("fetchable") and url and not url.lower().startswith(("http://", "https://")):
+        local = os.path.join(HERE, "docs", *url.split("/"))
+        if os.path.isfile(local):
+            return local
+        raise ValueError(f"bundled wordlist not found ({url})")
+    # big list this self-hosted server can download and run (e.g. rockyou)
+    if entry.get("server_fetch") and entry.get("download_url"):
+        return fetch_and_extract(entry)
+    # plain remote list
+    if entry.get("fetchable") and url and url.lower().startswith(("http://", "https://")):
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        dest = os.path.join(CACHE_DIR, entry["id"] + ".txt")
+        if os.path.exists(dest) and os.path.getsize(dest) > 0:
+            return dest
+        return _download(url, dest)
+    raise ValueError("this list is not available here; use the shown commands, "
+                     "or the hashcat path")
 
 
 @app.route("/")

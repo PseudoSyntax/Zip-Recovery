@@ -96,6 +96,7 @@
       "lines": 14344392,
       "size": "134 MB uncompressed",
       "fetchable": false,
+      "server_fetch": true,
       "category": "huge",
       "description": "The famous list of ~14.3 million real passwords from the 2009 RockYou breach. Too large to bundle or to run through this tool's one-at-a-time testing. Download it and run it through hashcat instead."
     },
