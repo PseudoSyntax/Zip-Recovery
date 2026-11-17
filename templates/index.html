@@ -53,9 +53,15 @@
         </fieldset>
 
         <div class="row">
-          <label>Years <input type="text" name="years" value="2015-2026"></label>
-          <label>Digit runs <input type="text" name="digits" value="0-99"></label>
-          <label>Leet cap / word <input type="number" name="leet_cap" value="64" min="1"></label>
+          <label><span class="lbl-row">Years
+            <button type="button" class="info" aria-label="What is Years?" data-tip="Added to the end of each word by the affix kit, e.g. Summer becomes Summer2019. Enter a range like 2015-2026, or a comma-separated list.">i</button></span>
+            <input type="text" name="years" value="2015-2026"></label>
+          <label><span class="lbl-row">Digit runs
+            <button type="button" class="info" aria-label="What are Digit runs?" data-tip="Numbers added to the end of each word by the affix kit, e.g. password becomes password42. Enter a range like 0-99.">i</button></span>
+            <input type="text" name="digits" value="0-99"></label>
+          <label><span class="lbl-row">Leet cap / word
+            <button type="button" class="info" aria-label="What is Leet cap?" data-tip="Leetspeak swaps letters for lookalikes (a to @ or 4, e to 3, o to 0, s to $). This caps how many such variants are built per word, so a long word cannot explode into millions.">i</button></span>
+            <input type="number" name="leet_cap" value="64" min="1"></label>
         </div>
 
         <div class="row">

@@ -4,7 +4,7 @@
 // File API and never leave your machine. The decryption libraries load from a
 // CDN (zip.js for .zip, a 7-Zip WebAssembly build for .7z).
 
-import { generate, loadWords } from "./engine.js";
+import { generate, loadWords, parseRange } from "./engine.js";
 
 const ZIPJS = "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.7.52/index.js";
 const SEVENZIP = "https://cdn.jsdelivr.net/npm/7z-wasm@1.2.0/7zz.es6.js";
@@ -18,6 +18,8 @@ const logEl = $("log");
 const resultEl = $("result");
 const goBtn = $("go");
 const cancelBtn = $("cancel");
+const progressEl = $("progress");
+const progressFill = $("progress-fill");
 
 let cancelFlag = false;
 let catalog = [];
@@ -204,6 +206,55 @@ function fail(stage, err, extra) {
   finish("error", Object.assign({ error: `while ${stage}: ${base}${stray}` }, extra || {}));
 }
 
+// Rough number of candidates a word count produces, for the progress bar.
+// It is an upper-ish estimate (dedup trims the real total), which is fine for a bar.
+function estimateTotal(numWords, opts) {
+  const kits = new Set(opts.kits);
+  const digits = parseRange(opts.digits).length;
+  const years = parseRange(opts.years).length;
+  let perWord = 0;
+  if (kits.has("base")) perWord += 1;
+  if (kits.has("case")) perWord += 5;
+  if (kits.has("affix")) perWord += 18 + digits + years * 3 + 3;
+  if (kits.has("leet")) perWord += opts.leetCap;
+  if (kits.has("dup")) perWord += 3;
+  let total = numWords * perWord;
+  if (kits.has("combo") && opts.combo) total += numWords * Math.max(0, numWords - 1) * opts.comboSeps.length;
+  return Math.max(1, total);
+}
+
+function setProgress(tried, total) {
+  const pct = Math.min(99.5, (tried / total) * 100);
+  progressFill.style.width = pct.toFixed(1) + "%";
+}
+
+// Run the generator over one word set, testing each candidate. Returns a result
+// object; carries the running "tried" count across lists via ctx.baseTried.
+async function testLoop(tester, words, opts, ctx) {
+  let tried = ctx.baseTried;
+  for (const pw of generate(words, opts)) {
+    if (cancelFlag) return { state: "cancelled", tried };
+    let ok;
+    try { ok = await tester(pw); }
+    catch (err) { return { state: "error", tried, err }; }
+    tried++;
+    if (ok) return { state: "found", tried, password: pw };
+
+    if (tried % 100 === 0) {
+      const secs = (performance.now() - ctx.start) / 1000;
+      rate = Math.max(1, (tried - ctx.startedTried) / secs);
+      const where = ctx.count > 1 ? `  [list ${ctx.idx + 1}/${ctx.count}: ${ctx.label}]` : "";
+      metaEl.textContent = `${tried.toLocaleString()} tried, ${rate.toFixed(0)}/s (full speed)${where}`;
+      logEl.textContent = "last candidate: " + pw.slice(0, 48);
+      setProgress(tried, ctx.total);
+      await new Promise((r) => setTimeout(r, 0));
+      if (opts.maxAttempts && tried >= opts.maxAttempts) return { state: "capped", tried };
+      if (opts.maxSeconds && secs >= opts.maxSeconds) return { state: "capped", tried };
+    }
+  }
+  return { state: "exhausted", tried };
+}
+
 async function run(e) {
   e.preventDefault();
   cancelFlag = false;
@@ -218,18 +269,29 @@ async function run(e) {
   cancelBtn.hidden = false;
   panel.hidden = false;
   resultEl.hidden = true;
+  resultEl.className = "";
   stateEl.textContent = "preparing";
   stateEl.className = "badge";
   logEl.textContent = "";
   metaEl.textContent = "";
+  progressEl.hidden = false;
+  progressFill.style.width = "0%";
 
-  // wordlist source: uploaded file wins, else a catalog pick
-  let wordlistText = "";
+  const opts = optsFromForm(fd);
+
+  // Build the ordered list of sources to try.
+  // Uploaded file wins; else "try all lists"; else the single pick; else hints only.
+  let sources;
+  const allLists = fd.get("all_lists");
   const wlFile = fd.get("wordlist");
   const wlId = fd.get("wordlist_id");
   if (wlFile && wlFile.name) {
-    try { wordlistText = await wlFile.text(); }
-    catch (err) { return fail("reading your wordlist file", err); }
+    let t; try { t = await wlFile.text(); } catch (err) { return fail("reading your wordlist file", err); }
+    sources = [{ label: wlFile.name, text: t, lines: t.split("\n").length }];
+  } else if (allLists) {
+    sources = catalog.filter((x) => x.fetchable && x.url)
+      .map((x) => ({ id: x.id, label: x.name, lines: x.lines }));
+    if (!sources.length) sources = [{ label: "your words", text: "", lines: 0 }];
   } else if (wlId && wlId !== "none") {
     const picked = catalog.find((x) => x.id === wlId);
     if (!picked) return fail("selecting a wordlist", new Error("unknown wordlist id " + wlId));
@@ -237,70 +299,89 @@ async function run(e) {
       return finish("error", { error: `"${picked.name}" is too large for the browser. ` +
         `Download it (${picked.download_url}) and use recall.exe, or pick a smaller list.` });
     }
-    stateEl.textContent = "loading wordlist";
-    try { wordlistText = await fetchCatalogList(picked); }
-    catch (err) { return fail("loading the wordlist", err); }
+    sources = [{ id: picked.id, label: picked.name, lines: picked.lines }];
+  } else {
+    sources = [{ label: "your words", text: "", lines: 0 }];
   }
 
-  const words = loadWords(wordlistText, hints);
-  if (!words.length) {
-    return finish("error", { error: "no candidates: pick a wordlist, upload one, or add some hint words" });
+  // Estimate the grand total for the progress bar (hints count once).
+  let total = 0;
+  for (let i = 0; i < sources.length; i++) {
+    const nWords = (sources[i].lines || 0) + (i === 0 ? hints.length : 0);
+    total += estimateTotal(Math.max(1, nWords), opts);
   }
 
-  const opts = optsFromForm(fd);
   stateEl.textContent = "starting engine";
-
   let tester;
-  try {
-    tester = await pickTester(archive);
-  } catch (err) {
-    return fail("starting the decryption engine", err);
-  }
+  try { tester = await pickTester(archive); }
+  catch (err) { return fail("starting the decryption engine", err); }
 
-  stateEl.textContent = "running";
   const start = performance.now();
-  let tried = 0;
+  let tried = 0, anyWords = false;
 
-  for (const pw of generate(words, opts)) {
+  for (let i = 0; i < sources.length; i++) {
     if (cancelFlag) return finish("cancelled", { tried, start });
-    let ok = false;
-    try {
-      ok = await tester(pw);
-    } catch (err) {
-      return fail("testing a password", err, { tried, start });
+    const src = sources[i];
+    let text = src.text;
+    if (text === undefined && src.id) {
+      stateEl.textContent = `loading ${src.label} (${i + 1}/${sources.length})`;
+      try { text = await fetchCatalogList(catalog.find((c) => c.id === src.id)); }
+      catch (err) { return fail(`loading the wordlist ${src.label}`, err, { tried, start }); }
     }
-    tried++;
-    if (ok) return finish("found", { password: pw, tried, start });
-
-    if (tried % 100 === 0) {
-      const secs = (performance.now() - start) / 1000;
-      rate = Math.max(1, tried / secs); // self-calibrate the estimate
-      metaEl.textContent = `${tried.toLocaleString()} tried, ${rate.toFixed(0)}/s (full speed)`;
-      logEl.textContent = "last candidate: " + pw.slice(0, 48);
-      await new Promise((r) => setTimeout(r, 0)); // let the page breathe
-      if (opts.maxAttempts && tried >= opts.maxAttempts) break;
-      if (opts.maxSeconds && secs >= opts.maxSeconds) break;
-    }
+    const words = loadWords(text || "", i === 0 ? hints : []);
+    if (words.length) anyWords = true;
+    stateEl.textContent = "running";
+    const res = await testLoop(tester, words, opts,
+      { start, startedTried: tried, baseTried: tried, total, label: src.label, idx: i, count: sources.length });
+    tried = res.tried;
+    if (res.state === "found") return finish("found", { password: res.password, tried, start, source: sources.length > 1 ? src.label : null });
+    if (res.state === "cancelled") return finish("cancelled", { tried, start });
+    if (res.state === "error") return fail("testing a password", res.err, { tried, start });
+    if (res.state === "capped") return finish("capped", { tried, start });
+    // exhausted this source: on to the next
   }
+
+  if (!anyWords) return finish("error", { error: "no candidates: pick a wordlist, upload one, or add some hint words" });
   finish("exhausted", { tried, start });
 }
 
 function finish(state, info) {
   goBtn.disabled = false;
   cancelBtn.hidden = true;
-  stateEl.textContent = state;
+  stateEl.textContent = state === "capped" ? "stopped at limit" : state;
   stateEl.className = "badge " + (state === "found" ? "ok" : "err");
   resultEl.hidden = false;
+  resultEl.className = "";
   if (info.start) {
     const secs = ((performance.now() - info.start) / 1000).toFixed(1);
     metaEl.textContent = `${(info.tried || 0).toLocaleString()} tried in ${secs}s`;
   }
+
   if (state === "found") {
-    resultEl.innerHTML = 'Password found: <code class="pw"></code>';
+    progressFill.style.width = "100%";
+    resultEl.className = "found-box";
+    resultEl.innerHTML =
+      '<div class="found-head">✓ Password found</div>' +
+      '<div class="found-pw"><code class="pw"></code>' +
+      '<button type="button" class="copy" id="copy-pw">Copy</button></div>' +
+      '<div class="found-src"></div>';
     resultEl.querySelector(".pw").textContent = info.password;
-  } else if (state === "exhausted") {
+    if (info.source) resultEl.querySelector(".found-src").textContent = "found in list: " + info.source;
+    const btn = resultEl.querySelector("#copy-pw");
+    btn.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(info.password); btn.textContent = "Copied"; }
+      catch { btn.textContent = "Copy failed"; }
+      setTimeout(() => { btn.textContent = "Copy"; }, 1500);
+    });
+    return;
+  }
+
+  progressEl.hidden = true;
+  if (state === "exhausted") {
     resultEl.textContent =
-      "No match across the whole candidate set. Add more words, enable more kits, or widen the ranges.";
+      "No match across the whole candidate set. Add more words, enable more kits, widen the ranges, or try the 'all lists' option.";
+  } else if (state === "capped") {
+    resultEl.textContent = "Stopped at the attempt/time limit you set before finding a match.";
   } else if (state === "cancelled") {
     resultEl.textContent = "Stopped.";
   } else {
@@ -310,3 +391,11 @@ function finish(state, info) {
 
 form.addEventListener("submit", run);
 cancelBtn.addEventListener("click", () => { cancelFlag = true; });
+
+const allEl = $("all_lists");
+if (allEl) allEl.addEventListener("change", () => {
+  const sel = $("wordlist_id");
+  sel.disabled = allEl.checked;
+  sel.style.opacity = allEl.checked ? "0.5" : "1";
+  if (allEl.checked) renderWlInfo();
+});
