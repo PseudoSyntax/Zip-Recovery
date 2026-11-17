@@ -156,24 +156,28 @@ Both web versions include a built-in picker of well-known wordlists
 (`wordlists.json`), each with a short description and an estimated run time that
 updates to the tries-per-second you enter. You can pick one or upload your own.
 
+The lists are **bundled in this repo** under `docs/wordlists/`, so nothing is
+fetched from a third-party CDN (the browser version loads them from the same
+origin, and the self-hosted app and the Windows exe read them locally).
+
 | list | lines | notes |
 |------|-------|-------|
 | Top 1,000 (SecLists) | 1,000 | fast first pass |
-| John the Ripper default (`password.lst`) | 3,559 | the small list John ships |
 | Top 10,000 (SecLists) | 10,000 | sensible default |
-| Probable Top 12,000 (berzerk0) | 12,000 | sorted by real-world frequency |
+| Probable Top 12,000 (berzerk0) | 12,645 | sorted by real-world frequency |
 | Top 100,000 (SecLists) | 100,000 | broader coverage |
 | hashcat `example.dict` | 128,416 | hashcat's bundled example dict, not frequency-sorted |
 | Top 1,000,000 (SecLists) | 1,000,000 | thorough, long run here |
-| rockyou.txt (full) | 14,344,392 | download + hashcat, too big for this tool |
+| John the Ripper default (`password.lst`) | ~1,795,690 | Openwall's list; much larger now than older "~3,500" docs say |
+| rockyou.txt (full) | 14,344,392 | download + hashcat, too big to bundle |
 | Weakpass | varies | up to tens of GB, hashcat only |
 
-The self-hosted app downloads a chosen list server-side and caches it. The
-GitHub Pages version fetches the smaller lists straight into the browser over a
-CDN; the very large ones (rockyou, Weakpass) are linked for download and the
-hashcat path rather than run in the page. Because the tool tests one password
-per archive-open, the estimates make it obvious why the million-plus lists
-belong on the GPU path below.
+The SecLists lists are the current `xato-net-10-million-passwords-*` files (the
+old `10-million-password-list-*` names were removed upstream, which is what the
+earlier CDN fetch was 404ing on). The two largest, rockyou and Weakpass, are not
+bundled; they are linked for download and the hashcat path. Because the tool
+tests one password per archive-open, the estimates make it obvious why the
+million-plus lists belong on the GPU path below.
 
 ## The fast path (true brute force)
 

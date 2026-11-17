@@ -31,6 +31,7 @@ jobs:
             --add-data "templates;templates" `
             --add-data "static;static" `
             --add-data "wordlists.json;." `
+            --add-data "docs/wordlists;docs/wordlists" `
             app.py
 
       # windows-latest ships 7-Zip at this path; use it to build real

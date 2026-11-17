@@ -154,11 +154,18 @@ def run_job(job_id, archive_path, wordlist_path, words, opts):
 # --------------------------------------------------------------------------- #
 
 def fetch_wordlist(entry):
-    """Download a catalog wordlist to the cache (once) and return its path."""
+    """Return a path to the catalog wordlist, reading it locally when it is
+    bundled in the repo (docs/wordlists/...) and only downloading otherwise."""
     url = entry.get("url")
     if not entry.get("fetchable") or not url:
-        raise ValueError("this list is not fetchable here; download it and upload "
+        raise ValueError("this list is not bundled here; download it and upload "
                          "it, or use it with the hashcat path")
+    # bundled list shipped with the repo (and with the frozen exe)
+    if not url.lower().startswith(("http://", "https://")):
+        local = os.path.join(HERE, "docs", *url.split("/"))
+        if os.path.isfile(local):
+            return local
+        raise ValueError(f"bundled wordlist not found ({url})")
     os.makedirs(CACHE_DIR, exist_ok=True)
     dest = os.path.join(CACHE_DIR, entry["id"] + ".txt")
     if os.path.exists(dest) and os.path.getsize(dest) > 0:
