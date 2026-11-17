@@ -1,9 +1,8 @@
 // Zip-Recovery (GitHub Pages / client-side).
 //
 // Everything runs in your browser. The archive and wordlist are read with the
-// File API and never sent anywhere. The only network requests this page makes
-// are for the two decryption libraries below, loaded from a CDN. Vendor them
-// into this folder if you want a fully offline, no-CDN deployment.
+// File API and never leave your machine. The decryption libraries load from a
+// CDN (zip.js for .zip, a 7-Zip WebAssembly build for .7z).
 
 import { generate, loadWords } from "./engine.js";
 
@@ -22,9 +21,33 @@ const cancelBtn = $("cancel");
 
 let cancelFlag = false;
 let catalog = [];
+let rate = 50; // tries/sec, only used for the rough estimate; self-calibrates
 
 // --------------------------------------------------------------------------- //
-// Wordlist catalog (descriptions + time estimates)
+// Error reporting: make every failure specific and log the full detail.
+// --------------------------------------------------------------------------- //
+
+function describeError(err) {
+  if (err == null) return "unknown error";
+  if (typeof err === "string") return err;
+  const name = err.name || "Error";
+  const msg = err.message || String(err);
+  return name && name !== "Error" ? `${name}: ${msg}` : msg;
+}
+
+// Capture stray errors a try/catch can miss (e.g. a WASM module calling abort()).
+let lastStray = "";
+addEventListener("error", (e) => {
+  lastStray = describeError(e.error || e.message);
+  console.error("[zip-recovery] window error:", e.error || e.message);
+});
+addEventListener("unhandledrejection", (e) => {
+  lastStray = describeError(e.reason);
+  console.error("[zip-recovery] unhandled rejection:", e.reason);
+});
+
+// --------------------------------------------------------------------------- //
+// Wordlist catalog (descriptions + rough time estimates)
 // --------------------------------------------------------------------------- //
 
 function fmtDuration(sec) {
@@ -36,12 +59,11 @@ function fmtDuration(sec) {
 }
 
 function renderWlInfo() {
-  const sel = $("wordlist_id"), info = $("wl-info"), rateEl = $("rate");
+  const sel = $("wordlist_id"), info = $("wl-info");
   const e = catalog.find((x) => x.id === sel.value);
   if (!e) { info.hidden = true; return; }
-  const rate = Math.max(1, parseInt(rateEl.value || "50", 10));
-  const est = e.lines ? `~${fmtDuration(e.lines / rate)} at ${rate}/s` : "n/a";
-  let line = `${e.description} (${(e.lines || 0).toLocaleString()} lines, ${e.size}; est ${est})`;
+  const est = e.lines ? `rough est ${fmtDuration(e.lines / rate)}` : "";
+  let line = `${e.description} (${(e.lines || 0).toLocaleString()} lines, ${e.size}${est ? "; " + est : ""})`;
   if (!e.fetchable) line += ` — too big for the browser; download: ${e.download_url}`;
   info.textContent = line;
   info.hidden = false;
@@ -49,14 +71,14 @@ function renderWlInfo() {
 
 async function fetchCatalogList(entry) {
   const r = await fetch(entry.url);
-  if (!r.ok) throw new Error("HTTP " + r.status);
+  if (!r.ok) throw new Error(`fetching ${entry.url} returned HTTP ${r.status}`);
   return await r.text();
 }
 
 fetch("./wordlists.json").then((r) => r.json()).then((data) => {
   catalog = data.lists || [];
-  const sel = $("wordlist_id"), rateEl = $("rate");
-  rateEl.value = data.default_rate || 50;
+  rate = data.default_rate || 50;
+  const sel = $("wordlist_id");
   for (const e of catalog) {
     const o = document.createElement("option");
     o.value = e.id;
@@ -64,22 +86,40 @@ fetch("./wordlists.json").then((r) => r.json()).then((data) => {
     sel.appendChild(o);
   }
   sel.addEventListener("change", renderWlInfo);
-  rateEl.addEventListener("input", renderWlInfo);
-}).catch(() => {});
+}).catch((err) => console.error("[zip-recovery] catalog load failed:", err));
 
 // --------------------------------------------------------------------------- //
 // In-browser password testers. Each returns async (pw) => bool.
 // --------------------------------------------------------------------------- //
 
+async function loadLib(url, label) {
+  try {
+    return await import(url);
+  } catch (err) {
+    throw new Error(
+      `could not load the ${label} engine from the CDN (${describeError(err)}). ` +
+      `Your network or browser may be blocking ${new URL(url).host}. ` +
+      `For .7z, the desktop app (recall.exe) or the command line avoids this.`);
+  }
+}
+
 async function makeZipTester(file) {
-  const zip = await import(ZIPJS);
-  zip.configure({ useWebWorkers: true });
-  // find the smallest file entry once, to make each test cheap
-  const probe = new zip.ZipReader(new zip.BlobReader(file));
-  const entries = (await probe.getEntries()).filter((e) => !e.directory);
-  await probe.close();
-  if (!entries.length) throw new Error("this zip has no files to test against");
+  const zip = await loadLib(ZIPJS, "zip.js");
+  try { zip.configure({ useWebWorkers: true }); } catch { /* non-fatal */ }
+
+  let entries;
+  try {
+    const probe = new zip.ZipReader(new zip.BlobReader(file));
+    entries = (await probe.getEntries()).filter((e) => !e.directory);
+    await probe.close();
+  } catch (err) {
+    throw new Error(`could not read the zip structure (${describeError(err)}). Is this a valid .zip file?`);
+  }
+  if (!entries.length) throw new Error("this zip has no files inside to test a password against");
   entries.sort((a, b) => (a.compressedSize || 0) - (b.compressedSize || 0));
+  if (entries[0].encrypted === false) {
+    throw new Error("this zip is not password-protected, so there is nothing to recover");
+  }
   const targetName = entries[0].filename;
 
   return async (pw) => {
@@ -89,41 +129,56 @@ async function makeZipTester(file) {
       const t = es.find((e) => e.filename === targetName);
       await t.getData(new zip.Uint8ArrayWriter());
       await reader.close();
-      return true; // decrypted + CRC/HMAC checked out
+      return true; // decrypted and CRC/HMAC verified
     } catch {
-      try { await reader.close(); } catch {}
-      return false;
+      try { await reader.close(); } catch { /* ignore */ }
+      return false; // wrong password
     }
   };
 }
 
 async function make7zTester(file) {
-  const factory = (await import(SEVENZIP)).default;
+  const mod = await loadLib(SEVENZIP, "7-Zip");
+  const factory = mod.default;
+  if (typeof factory !== "function") {
+    throw new Error("the 7-Zip engine loaded but exposed no entry point (unexpected module shape)");
+  }
   const bytes = new Uint8Array(await file.arrayBuffer());
-  let out = "";
-  const sevenZip = await factory({
-    print: (s) => { out += s + "\n"; },
-    printErr: (s) => { out += s + "\n"; },
-  });
-  sevenZip.FS.writeFile("archive.7z", bytes);
 
+  // The Emscripten 7-Zip build aborts if its main() runs more than once per
+  // instance (this is the "operation aborted" people hit). So create a fresh
+  // instance for each password test. This is correct but slower than .zip; for
+  // large .7z wordlists the desktop recall.exe is much faster.
   return async (pw) => {
-    out = "";
+    let out = "";
+    let sevenZip;
     try {
-      // test the archive with this password; silent, assume-yes
-      sevenZip.callMain(["t", "archive.7z", "-p" + pw, "-y", "-bso0"]);
-    } catch {
-      // emscripten raises ExitStatus on non-zero exit; the text in `out` decides
+      sevenZip = await factory({
+        print: (s) => { out += s + "\n"; },
+        printErr: (s) => { out += s + "\n"; },
+      });
+    } catch (err) {
+      throw new Error(`the 7-Zip engine failed to start (${describeError(err)})`);
     }
-    return /Everything is Ok/.test(out) && !/Wrong password|Can not|ERROR/i.test(out);
+    try {
+      sevenZip.FS.writeFile("a.7z", bytes);
+      sevenZip.callMain(["t", "a.7z", "-p" + pw, "-y", "-bso0"]);
+    } catch (err) {
+      // A non-zero exit throws Emscripten's ExitStatus, which is the normal
+      // "wrong password" signal. A real abort with no output is a failure.
+      const m = describeError(err);
+      if (/abort/i.test(m) && !out) throw new Error(`7-Zip aborted while testing a password (${m})`);
+    }
+    return /Everything is Ok/.test(out) && !/Wrong password|Can not open|ERROR/i.test(out);
   };
 }
 
 function pickTester(file) {
-  const ext = file.name.toLowerCase().slice(file.name.lastIndexOf("."));
+  const dot = file.name.lastIndexOf(".");
+  const ext = dot >= 0 ? file.name.slice(dot).toLowerCase() : "";
   if (ext === ".zip") return makeZipTester(file);
   if (ext === ".7z") return make7zTester(file);
-  throw new Error("only .7z and .zip are supported");
+  throw new Error(`unsupported file type "${ext || file.name}". Only .zip and .7z are supported.`);
 }
 
 // --------------------------------------------------------------------------- //
@@ -142,9 +197,17 @@ function optsFromForm(fd) {
   };
 }
 
+function fail(stage, err, extra) {
+  const base = describeError(err);
+  const stray = lastStray && !base.includes(lastStray) ? ` [also saw: ${lastStray}]` : "";
+  console.error(`[zip-recovery] failed while ${stage}:`, err);
+  finish("error", Object.assign({ error: `while ${stage}: ${base}${stray}` }, extra || {}));
+}
+
 async function run(e) {
   e.preventDefault();
   cancelFlag = false;
+  lastStray = "";
   const fd = new FormData(form);
   const archive = fd.get("archive");
   if (!archive || !archive.name) { alert("Choose an archive first."); return; }
@@ -160,59 +223,61 @@ async function run(e) {
   logEl.textContent = "";
   metaEl.textContent = "";
 
-  // where the wordlist comes from: uploaded file wins, else a catalog pick
+  // wordlist source: uploaded file wins, else a catalog pick
   let wordlistText = "";
   const wlFile = fd.get("wordlist");
   const wlId = fd.get("wordlist_id");
   if (wlFile && wlFile.name) {
-    wordlistText = await wlFile.text();
+    try { wordlistText = await wlFile.text(); }
+    catch (err) { return fail("reading your wordlist file", err); }
   } else if (wlId && wlId !== "none") {
-    const e = catalog.find((x) => x.id === wlId);
-    if (!e) { finish("error", { error: "unknown wordlist" }); return; }
-    if (!e.fetchable || !e.url) {
-      finish("error", { error: `"${e.name}" is too large for the browser. ` +
-        `Download it (${e.download_url}) and use recall.py, or upload a smaller list.` });
-      return;
+    const picked = catalog.find((x) => x.id === wlId);
+    if (!picked) return fail("selecting a wordlist", new Error("unknown wordlist id " + wlId));
+    if (!picked.fetchable || !picked.url) {
+      return finish("error", { error: `"${picked.name}" is too large for the browser. ` +
+        `Download it (${picked.download_url}) and use recall.exe, or pick a smaller list.` });
     }
-    stateEl.textContent = "downloading wordlist";
-    try { wordlistText = await fetchCatalogList(e); }
-    catch (err) { finish("error", { error: "could not download wordlist: " + err.message }); return; }
+    stateEl.textContent = "loading wordlist";
+    try { wordlistText = await fetchCatalogList(picked); }
+    catch (err) { return fail("loading the wordlist", err); }
   }
 
   const words = loadWords(wordlistText, hints);
-  if (!words.length) { finish("error", { error: "pick a wordlist, upload one, or add hint words" }); return; }
+  if (!words.length) {
+    return finish("error", { error: "no candidates: pick a wordlist, upload one, or add some hint words" });
+  }
 
   const opts = optsFromForm(fd);
-  stateEl.textContent = "loading engine";
+  stateEl.textContent = "starting engine";
 
   let tester;
   try {
     tester = await pickTester(archive);
   } catch (err) {
-    finish("error", { error: err.message });
-    return;
+    return fail("starting the decryption engine", err);
   }
 
   stateEl.textContent = "running";
   const start = performance.now();
   let tried = 0;
-  const unlimited = opts.maxAttempts === 0 && opts.maxSeconds === 0;
 
   for (const pw of generate(words, opts)) {
-    if (cancelFlag) { finish("cancelled", { tried, start }); return; }
+    if (cancelFlag) return finish("cancelled", { tried, start });
     let ok = false;
-    try { ok = await tester(pw); } catch (err) {
-      finish("error", { error: err.message, tried, start }); return;
+    try {
+      ok = await tester(pw);
+    } catch (err) {
+      return fail("testing a password", err, { tried, start });
     }
     tried++;
-    if (ok) { finish("found", { password: pw, tried, start }); return; }
+    if (ok) return finish("found", { password: pw, tried, start });
 
-    if (tried % 25 === 0) {
+    if (tried % 100 === 0) {
       const secs = (performance.now() - start) / 1000;
-      metaEl.textContent = `${tried} tried at ${(tried / secs).toFixed(0)}/s` +
-        (unlimited ? " (unlimited)" : "");
-      logEl.textContent = "last candidate: " + pw.slice(0, 40);
-      await new Promise((r) => setTimeout(r, 0)); // keep the page responsive
+      rate = Math.max(1, tried / secs); // self-calibrate the estimate
+      metaEl.textContent = `${tried.toLocaleString()} tried, ${rate.toFixed(0)}/s (full speed)`;
+      logEl.textContent = "last candidate: " + pw.slice(0, 48);
+      await new Promise((r) => setTimeout(r, 0)); // let the page breathe
       if (opts.maxAttempts && tried >= opts.maxAttempts) break;
       if (opts.maxSeconds && secs >= opts.maxSeconds) break;
     }
@@ -228,7 +293,7 @@ function finish(state, info) {
   resultEl.hidden = false;
   if (info.start) {
     const secs = ((performance.now() - info.start) / 1000).toFixed(1);
-    metaEl.textContent = `${info.tried || 0} tried in ${secs}s`;
+    metaEl.textContent = `${(info.tried || 0).toLocaleString()} tried in ${secs}s`;
   }
   if (state === "found") {
     resultEl.innerHTML = 'Password found: <code class="pw"></code>';
@@ -239,7 +304,7 @@ function finish(state, info) {
   } else if (state === "cancelled") {
     resultEl.textContent = "Stopped.";
   } else {
-    resultEl.textContent = "Error: " + (info.error || "unknown");
+    resultEl.textContent = "Error: " + (info.error || "unknown") + "  (full detail in the browser console)";
   }
 }
 
