@@ -110,3 +110,6 @@ select { background: var(--panel); color: var(--ink); border: 1px solid var(--li
 .found-pw .pw { font-size: 1.3rem; background: #0c2a20; color: #d7ffe9; padding: .35rem .6rem; border-radius: 8px; user-select: all; }
 .copy { background: var(--ok); color: #05241a; border: 0; border-radius: 7px; padding: .4rem .8rem; font-weight: 700; cursor: pointer; }
 .found-src { color: #9fd9c3; font-size: .85rem; margin-top: .55rem; }
+/* clone-and-run command block for too-big lists */
+.cmd-note { margin-top: .55rem; color: var(--muted); font-size: .82rem; }
+.cmds { background: #0c0e12; border: 1px solid var(--line); border-radius: 8px; padding: .6rem .7rem; margin: .45rem 0; font-size: .75rem; line-height: 1.55; color: #c9d3e3; overflow-x: auto; white-space: pre; font-family: ui-monospace, Menlo, Consolas, monospace; }

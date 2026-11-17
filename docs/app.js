@@ -60,14 +60,88 @@ function fmtDuration(sec) {
   return "<1 sec";
 }
 
+// The archive the user has chosen, so the commands reference their real file.
+function archiveInfo() {
+  const inp = $("archive");
+  const f = inp && inp.files && inp.files[0];
+  const name = f ? f.name : "YOUR_ARCHIVE.7z";
+  const ext = name.toLowerCase().endsWith(".zip") ? "zip" : "7z";
+  return { name, ext };
+}
+
+// Exact clone-and-run commands for a list too big to run in the browser.
+function commandsFor(entry) {
+  const { name, ext } = archiveInfo();
+  const q = /\s/.test(name) ? `"${name}"` : name;
+  const john = ext === "zip" ? "zip2john" : "7z2john";
+  const mode = ext === "zip" ? "13600" : "11600";
+  const modeNote = ext === "zip" ? "   # WinZip AES; check zip2john output for the right -m" : "";
+  const L = [
+    "# 1. get the tool",
+    "git clone https://github.com/PseudoSyntax/Zip-Recovery.git",
+    "cd Zip-Recovery",
+    "pip install -r requirements.txt",
+    "",
+  ];
+  if (entry.id === "rockyou") {
+    L.push(
+      "# 2. get rockyou (~134 MB)",
+      "curl -L -o rockyou.txt.tar.gz \\",
+      "  " + entry.download_url,
+      "tar -xzf rockyou.txt.tar.gz        # -> rockyou.txt",
+      "",
+      "# 3. run against your file",
+      `python recall.py ${q} -w rockyou.txt`,
+      "",
+      "# much faster (GPU brute force) instead of step 3:",
+      `${john} ${q} > hash.txt`,
+      `hashcat -m ${mode} hash.txt rockyou.txt${modeNote}`,
+    );
+  } else {
+    L.push(
+      `# 2. download a list from ${entry.download_url}`,
+      "#    and save it as wordlist.txt in this folder",
+      "",
+      "# 3. run against your file",
+      `python recall.py ${q} -w wordlist.txt`,
+      "",
+      "# much faster (GPU brute force):",
+      `${john} ${q} > hash.txt`,
+      `hashcat -m ${mode} hash.txt wordlist.txt${modeNote}`,
+    );
+  }
+  return L.join("\n");
+}
+
 function renderWlInfo() {
   const sel = $("wordlist_id"), info = $("wl-info");
   const e = catalog.find((x) => x.id === sel.value);
+  info.innerHTML = "";
   if (!e) { info.hidden = true; return; }
+
   const est = e.lines ? `rough est ${fmtDuration(e.lines / rate)}` : "";
-  let line = `${e.description} (${(e.lines || 0).toLocaleString()} lines, ${e.size}${est ? "; " + est : ""})`;
-  if (!e.fetchable) line += ` — too big for the browser; download: ${e.download_url}`;
-  info.textContent = line;
+  const desc = document.createElement("div");
+  desc.textContent = `${e.description} (${(e.lines || 0).toLocaleString()} lines, ${e.size}${est ? "; " + est : ""})`;
+  info.appendChild(desc);
+
+  if (!e.fetchable) {
+    const note = document.createElement("div");
+    note.className = "cmd-note";
+    note.textContent = "Too big to run in the browser. Clone the tool and run it against your file:";
+    info.appendChild(note);
+    const pre = document.createElement("pre");
+    pre.className = "cmds";
+    pre.textContent = commandsFor(e);
+    info.appendChild(pre);
+    const copy = document.createElement("button");
+    copy.type = "button"; copy.className = "copy"; copy.textContent = "Copy commands";
+    copy.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(pre.textContent); copy.textContent = "Copied"; }
+      catch { copy.textContent = "Copy failed"; }
+      setTimeout(() => { copy.textContent = "Copy commands"; }, 1500);
+    });
+    info.appendChild(copy);
+  }
   info.hidden = false;
 }
 
@@ -296,8 +370,8 @@ async function run(e) {
     const picked = catalog.find((x) => x.id === wlId);
     if (!picked) return fail("selecting a wordlist", new Error("unknown wordlist id " + wlId));
     if (!picked.fetchable || !picked.url) {
-      return finish("error", { error: `"${picked.name}" is too large for the browser. ` +
-        `Download it (${picked.download_url}) and use recall.exe, or pick a smaller list.` });
+      return finish("error", { error: `"${picked.name}" is too large to run in the browser. ` +
+        `Use the clone-and-run commands shown under the list, or pick a smaller list.` });
     }
     sources = [{ id: picked.id, label: picked.name, lines: picked.lines }];
   } else {
@@ -398,4 +472,12 @@ if (allEl) allEl.addEventListener("change", () => {
   sel.disabled = allEl.checked;
   sel.style.opacity = allEl.checked ? "0.5" : "1";
   if (allEl.checked) renderWlInfo();
+});
+
+// re-render the command block with the real filename once an archive is chosen
+const archiveEl = $("archive");
+if (archiveEl) archiveEl.addEventListener("change", () => {
+  const sel = $("wordlist_id");
+  const e = catalog.find((x) => x.id === sel.value);
+  if (e && !e.fetchable) renderWlInfo();
 });
